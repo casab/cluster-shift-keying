@@ -8,7 +8,7 @@
 | 2 | Chen System & ODE Integrator | **DONE** |
 | 3 | Linear Algebra Utilities | **DONE** |
 | 4 | Network Topology Construction | **DONE** |
-| 5 | Graph Symmetry & Cluster Partitions | TODO |
+| 5 | Graph Symmetry & Cluster Partitions | **DONE** |
 | 6 | Master Stability Function | TODO |
 | 7 | Cluster Sync Verification & Coupled Network Sim | TODO |
 | 8 | Symbol Mapping & CLSK Modulator | TODO |
@@ -273,6 +273,20 @@ cluster-shift-keying/
    - Ring(6) partitions enumerated correctly
 
 **Tests:** Octagon partition count, complete graph edge case, Ring(6) partitions
+
+**Status: DONE** — Commit `phase 5: implement graph symmetry & cluster partitions`
+- `ClusterPattern`: serde-serializable assignment vector with `num_clusters()`, `nodes_in_cluster()`,
+  `are_same_cluster()`, `is_equitable()`, `label()`, canonical form, `Display`
+- `SymmetryDetector`: color refinement (1-WL) for orbit detection, backtracking automorphism enumeration
+  - Verified: C₄→D₄(8), K₄→S₄(24), C₈→D₈(16) automorphisms
+- `PartitionEnumerator`: exhaustive enumeration (n≤16) of non-trivial equitable partitions via
+  restricted growth strings, plus `enumerate_unique()` deduplication under automorphisms
+- Key findings for C₈: 6 structurally distinct equitable partition types (2×2-cluster, 1×3-cluster,
+  2×4-cluster, 1×5-cluster); the paper's "2 cluster patterns" refers to the 2-cluster types
+  relevant for binary CLSK communication
+- 23 new tests (106 total), all passing. Clippy and fmt clean.
+- Deviations: spectral orbit detection replaced with color refinement (handles degenerate eigenspaces);
+  `serde_json` added as dev-dependency for serialization tests
 
 ---
 
