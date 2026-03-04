@@ -5,7 +5,7 @@
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Project Scaffold & Core Traits | **DONE** |
-| 2 | Chen System & ODE Integrator | TODO |
+| 2 | Chen System & ODE Integrator | **DONE** |
 | 3 | Linear Algebra Utilities | TODO |
 | 4 | Network Topology Construction | TODO |
 | 5 | Graph Symmetry & Cluster Partitions | TODO |
@@ -164,6 +164,18 @@ cluster-shift-keying/
    - Verify Lyapunov exponent is positive (chaotic regime confirmation)
 
 **Tests:** Derivative values, integrator convergence order, attractor boundedness, chaos verification
+
+**Status: DONE** — Commit `phase 2: implement Chen system, RK4 integrator, and Rössler stub`
+- All tasks completed (ChenSystem, RK4 integrator, RosslerSystem)
+- 22 unit tests + 4 integration tests passing (26 total)
+- `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean
+- Deviations from plan:
+  - No builder pattern for ChenSystem; uses `new(a, b, c)` with validation + `default_paper()` factory (simpler, sufficient)
+  - No adaptive step-size (Dormand-Prince) yet; deferred to Phase 15 if needed — fixed-step RK4 verified stable at dt=0.001 for Chen
+  - RosslerSystem is a full implementation (not a stub with `todo!()`), including derivative and boundedness tests
+  - RK4 integrator includes `integrate_to_end()` for memory-efficient final-state-only integration
+  - ChenSystem includes analytic Jacobian (`jacobian()` method on the trait), needed for Phase 6 MSF computation
+  - Integration test `chen_attractor.rs` includes Jacobian-vs-finite-difference verification
 
 ---
 
