@@ -6,7 +6,7 @@
 |-------|-------------|--------|
 | 1 | Project Scaffold & Core Traits | **DONE** |
 | 2 | Chen System & ODE Integrator | **DONE** |
-| 3 | Linear Algebra Utilities | TODO |
+| 3 | Linear Algebra Utilities | **DONE** |
 | 4 | Network Topology Construction | TODO |
 | 5 | Graph Symmetry & Cluster Partitions | TODO |
 | 6 | Master Stability Function | TODO |
@@ -200,6 +200,16 @@ cluster-shift-keying/
    - Block-diag of known commuting matrices
 
 **Tests:** Eigenvalue accuracy, Kronecker correctness, block-diag round-trip
+
+**Status: DONE** — Commit `phase 3: implement linear algebra utilities`
+- All 4 tasks completed (matrix wrapper, eigen solver, block-diag, unit tests)
+- 34 new unit tests (60 total), all passing
+- `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean
+- Deviations from plan:
+  - Matrix wrapper includes additional utilities beyond plan: `mul()`, `transpose()`, `frobenius_norm()`, `from_diagonal()`, `set()`/`get()` with bounds checking, `Display` impl
+  - Method named `kronecker()` instead of `kronecker_product()` for brevity
+  - `general_eigen` uses Schur decomposition (no eigenvectors) — `symmetric_eigen` provides eigenvectors for the cases that need them
+  - `from_adjacency` takes `(i, j, weight)` triples instead of a full adjacency matrix
 
 ---
 
