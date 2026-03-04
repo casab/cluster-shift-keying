@@ -7,7 +7,7 @@
 | 1 | Project Scaffold & Core Traits | **DONE** |
 | 2 | Chen System & ODE Integrator | **DONE** |
 | 3 | Linear Algebra Utilities | **DONE** |
-| 4 | Network Topology Construction | TODO |
+| 4 | Network Topology Construction | **DONE** |
 | 5 | Graph Symmetry & Cluster Partitions | TODO |
 | 6 | Master Stability Function | TODO |
 | 7 | Cluster Sync Verification & Coupled Network Sim | TODO |
@@ -235,6 +235,17 @@ cluster-shift-keying/
    - `set_coupling_strength` scales correctly
 
 **Tests:** Adjacency structure, Laplacian spectrum, coupling strength scaling
+
+**Status: DONE** — Commit `phase 4: implement network topology construction`
+- All tasks completed (CouplingMatrix, TopologyBuilder with octagon/ring/complete/lattice_2d/from_adjacency)
+- 23 new unit tests (83 total), all passing
+- `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean
+- Deviations from plan:
+  - `TopologyBuilder` is a unit struct with associated functions (no state needed)
+  - Default inner coupling Γ = diag(0,1,0) applied automatically; `from_adjacency_with_gamma()` added for custom Γ
+  - `lattice_2d` uses periodic boundary conditions (torus), matching standard network science convention
+  - `CouplingMatrix` includes `is_symmetric()`, `scaled_adjacency()`, and `degree_matrix()` beyond plan
+  - Per-edge coupling supported via weighted adjacency entries (no separate edge-weight map)
 
 ---
 
