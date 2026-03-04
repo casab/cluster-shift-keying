@@ -13,7 +13,7 @@
 | 7 | Cluster Sync Verification & Coupled Network Sim | **DONE** |
 | 8 | Symbol Mapping & CLSK Modulator | **DONE** |
 | 9 | Synchronization Energy Detector | **DONE** |
-| 10 | CLSK Demodulator | TODO |
+| 10 | CLSK Demodulator | **DONE** |
 | 11 | Channel Models | TODO |
 | 12 | BER Evaluation & Metrics | TODO |
 | 13 | End-to-End Pipeline & Configuration | TODO |
@@ -471,6 +471,8 @@ cluster-shift-keying/
    - Verify score margin: correct symbol score >> incorrect symbol scores
 
 **Tests:** Perfect decode on noiseless channel, score margin verification
+
+**Status:** DONE — 197 tests total. Implemented `Demodulator` with signal injection, trajectory recording, sync energy scoring, and argmax symbol detection. `DemodulatorWithSystem` implements `Decoder` trait. `score_all()` returns ranked scores for all candidates. 8 unit tests covering creation, error cases, single symbol encode-decode, sequence decode, trait interface, and score ranking.
 
 ---
 

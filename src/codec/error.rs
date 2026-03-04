@@ -32,4 +32,7 @@ pub enum CodecError {
 
     #[error(transparent)]
     Graph(#[from] crate::graph::GraphError),
+
+    #[error(transparent)]
+    Metrics(#[from] crate::metrics::MetricsError),
 }
