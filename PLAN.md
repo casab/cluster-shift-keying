@@ -12,7 +12,7 @@
 | 6 | Master Stability Function | **DONE** |
 | 7 | Cluster Sync Verification & Coupled Network Sim | **DONE** |
 | 8 | Symbol Mapping & CLSK Modulator | **DONE** |
-| 9 | Synchronization Energy Detector | TODO |
+| 9 | Synchronization Energy Detector | **DONE** |
 | 10 | CLSK Demodulator | TODO |
 | 11 | Channel Models | TODO |
 | 12 | BER Evaluation & Metrics | TODO |
@@ -443,6 +443,8 @@ cluster-shift-keying/
    - Threshold correctly separates synchronized from unsynchronized pairs
 
 **Tests:** Zero-energy for identical signals, nonzero for distinct, threshold correctness
+
+**Status:** DONE — 188 tests total (176 unit + 12 integration). Implemented `SyncEnergyDetector` with trapezoidal integration, `SyncEnergyMatrix` with auto-threshold, `BinarySyncMatrix` with pattern detection, `ScoringFunction` trait with `RatioScoring` and `MinIntraScoring` implementations. 16 unit tests covering zero-energy, nonzero energy, threshold classification, pattern matching, and scoring functions.
 
 ---
 
