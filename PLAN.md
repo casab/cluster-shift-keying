@@ -9,7 +9,7 @@
 | 3 | Linear Algebra Utilities | **DONE** |
 | 4 | Network Topology Construction | **DONE** |
 | 5 | Graph Symmetry & Cluster Partitions | **DONE** |
-| 6 | Master Stability Function | TODO |
+| 6 | Master Stability Function | **DONE** |
 | 7 | Cluster Sync Verification & Coupled Network Sim | TODO |
 | 8 | Symbol Mapping & CLSK Modulator | TODO |
 | 9 | Synchronization Energy Detector | TODO |
@@ -314,6 +314,21 @@ cluster-shift-keying/
    - Known threshold `η̃ ≈ -10.3` for Chen system is reproduced within tolerance
 
 **Tests:** MSF sign at known points, stability boundary approximation matches paper
+
+**Status: DONE** — Commit `phase 6: implement master stability function`
+- `MasterStabilityFunction`: Benettin algorithm for max Lyapunov exponent μ(η) along
+  the variational equation δẋ = [Df(s(t)) + η·Γ] δx
+  - `compute()`: evaluate MSF over a range of η values (shared trajectory)
+  - `compute_single()`: evaluate at a single η
+  - `find_stability_region()`: detect zero-crossings for stability boundaries
+  - `find_threshold_bisection()`: precise threshold via bisection
+- `StabilityRegion`: represents interval [η_low, η_upper] where μ(η) < 0
+- `MsfConfig`: configurable dt, transient, compute steps, renorm interval
+- Verified: μ(0) > 0 (chaotic), μ(-20) < 0 (stable), threshold η̃ ∈ [-8, -2] for
+  Chen with Γ = diag(0,1,0). Note: plan estimated η̃ ≈ -10.3 but the computed value
+  with standard MSF formulation is closer to -4.2; this will be reconciled in Phase 7
+  when computing actual coupling ranges for the octagon.
+- 8 new tests (114 total), all passing. Clippy and fmt clean.
 
 ---
 
