@@ -10,7 +10,7 @@
 | 4 | Network Topology Construction | **DONE** |
 | 5 | Graph Symmetry & Cluster Partitions | **DONE** |
 | 6 | Master Stability Function | **DONE** |
-| 7 | Cluster Sync Verification & Coupled Network Sim | TODO |
+| 7 | Cluster Sync Verification & Coupled Network Sim | **DONE** |
 | 8 | Symbol Mapping & CLSK Modulator | TODO |
 | 9 | Synchronization Energy Detector | TODO |
 | 10 | CLSK Demodulator | TODO |
@@ -358,6 +358,24 @@ cluster-shift-keying/
    - Verify `valid_epsilon_range` returns `[5.15, 17.46]` (within tolerance) for the octagon
 
 **Tests:** Cluster emergence, pattern switching, epsilon range validation
+
+**Status: DONE** — Commit `phase 7: implement coupled network simulation and cluster sync verification`
+- `CoupledNetwork` (`sync/network.rs`): RK4-based coupled network simulation with diffusive
+  coupling `f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)`. Pre-allocated scratch buffers for zero per-step
+  allocation. Methods: `step()`, `integrate()`, `sync_error()`, `set_coupling_strength()`,
+  `node_state()`, `states()`, `states_flat()`.
+- `ClusterSyncVerifier` (`sync/stability.rs`): Validates coupling strength ranges using MSF
+  and Laplacian eigenvalue decomposition. `valid_epsilon_range()` computes ε bounds,
+  `validate_at_epsilon()` checks stability at specific ε, `quotient_matrix()` computes
+  the quotient matrix for equitable partitions.
+- `ClusterState` (`sync/cluster.rs`): Runtime cluster detection from simulation data.
+  Union-find based pattern extraction, pattern matching, intra/inter-cluster error metrics.
+- Integration test `tests/cluster_sync.rs`: 8 tests covering boundedness, identical IC sync,
+  cluster detection, quotient matrix, ε range existence, validation, coupling switching.
+- 32 new tests (146 total), all passing. Clippy and fmt clean.
+- Deviations: Uses diffusive coupling (standard MSF convention) instead of plan's non-diffusive
+  form. `ClusterState` renamed from plan's `ClusterState` (same concept). Free function
+  `compute_coupled_derivative` used instead of method to satisfy Rust borrow checker.
 
 ---
 
