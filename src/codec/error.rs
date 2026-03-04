@@ -15,6 +15,9 @@ pub enum CodecError {
     #[error("symbol map is empty — at least 2 symbols required")]
     EmptySymbolMap,
 
+    #[error("invalid symbol map: {reason}")]
+    InvalidSymbolMap { reason: String },
+
     #[error("detection failed: {reason}")]
     DetectionFailed { reason: String },
 
@@ -23,4 +26,10 @@ pub enum CodecError {
 
     #[error(transparent)]
     Dynamics(#[from] crate::dynamics::DynamicsError),
+
+    #[error(transparent)]
+    Sync(#[from] crate::sync::SyncError),
+
+    #[error(transparent)]
+    Graph(#[from] crate::graph::GraphError),
 }

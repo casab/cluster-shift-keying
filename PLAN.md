@@ -11,7 +11,7 @@
 | 5 | Graph Symmetry & Cluster Partitions | **DONE** |
 | 6 | Master Stability Function | **DONE** |
 | 7 | Cluster Sync Verification & Coupled Network Sim | **DONE** |
-| 8 | Symbol Mapping & CLSK Modulator | TODO |
+| 8 | Symbol Mapping & CLSK Modulator | **DONE** |
 | 9 | Synchronization Energy Detector | TODO |
 | 10 | CLSK Demodulator | TODO |
 | 11 | Channel Models | TODO |
@@ -405,6 +405,19 @@ cluster-shift-keying/
    - Channel signals are different (in energy profile) for different symbols
 
 **Tests:** Covertness validation, signal continuity, inter-symbol distinguishability
+
+**Status: DONE** — Commit `phase 8: implement symbol mapping and CLSK modulator`
+- `SymbolMap` (`codec/symbol_map.rs`): Maps M-ary symbols to (ClusterPattern, ε) pairs.
+  Validates covertness condition (channel link nodes never co-clustered), consecutive symbol
+  indices, consistent node counts. `binary()` convenience constructor.
+- `Modulator` (`codec/modulator.rs`): RK4-based transmitter that switches coupling ε per
+  symbol, integrates for one bit period, and records channel link node signals.
+  `encode_with_system()` for direct use, `ModulatorWithSystem` implements `Encoder` trait.
+  `encode_sequence()` for multi-symbol encoding.
+- `FrameConfig` (`codec/framing.rs`): Timing structure for CLSK frames with bit period,
+  guard interval, preamble support. Validates all parameters.
+- `CodecError` extended with `Sync`, `Graph`, and `InvalidSymbolMap` variants.
+- 26 new tests (172 total), all passing. Clippy and fmt clean.
 
 ---
 
