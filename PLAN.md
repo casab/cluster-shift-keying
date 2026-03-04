@@ -1,5 +1,28 @@
 # CLSK Implementation Plan — Rust
 
+## Phase Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Project Scaffold & Core Traits | **DONE** |
+| 2 | Chen System & ODE Integrator | TODO |
+| 3 | Linear Algebra Utilities | TODO |
+| 4 | Network Topology Construction | TODO |
+| 5 | Graph Symmetry & Cluster Partitions | TODO |
+| 6 | Master Stability Function | TODO |
+| 7 | Cluster Sync Verification & Coupled Network Sim | TODO |
+| 8 | Symbol Mapping & CLSK Modulator | TODO |
+| 9 | Synchronization Energy Detector | TODO |
+| 10 | CLSK Demodulator | TODO |
+| 11 | Channel Models | TODO |
+| 12 | BER Evaluation & Metrics | TODO |
+| 13 | End-to-End Pipeline & Configuration | TODO |
+| 14 | Examples & Paper Reproduction | TODO |
+| 15 | Performance & Benchmarks | TODO |
+| 16 | Extensibility Hooks & Future-Proofing | TODO |
+
+---
+
 ## Architecture Overview
 
 ```
@@ -111,6 +134,12 @@ cluster-shift-keying/
 8. Verify `cargo build` and `cargo test` pass (empty tests)
 
 **Tests:** Compilation smoke test, trait object safety assertions
+
+**Status: DONE** — Commit `phase 1: project scaffold, core traits, and error types`
+- All 8 tasks completed
+- 6 tests passing: object safety (2), error Send+Sync (1), error conversions (1), RNG determinism (2)
+- `cargo clippy -- -D warnings` clean
+- Deviations from plan: `DynamicalSystem::derivative` returns `Result<(), DynamicsError>` (not `()`), `ChannelModel` is `Send + Sync` and returns `Result`, `CodecChain` included in Phase 1
 
 ---
 
