@@ -46,6 +46,9 @@ pub struct Demodulator {
     /// Buffer for received channel link signals (one per link, per bit period).
     /// Indexed as received_signals[link_index][time_step].
     received_signals: Vec<Vec<f64>>,
+    /// Pre-allocated buffer for saving/restoring network states, avoiding
+    /// per-symbol heap allocation in detect_symbol().
+    saved_states_buf: Vec<f64>,
 }
 
 impl Demodulator {
@@ -87,12 +90,14 @@ impl Demodulator {
         let network = CoupledNetwork::new(coupling, &config.initial_state, Some(&perturbations))?;
         let num_links = symbol_map.channel_links().len();
         let steps = frame_config.steps_per_bit();
+        let state_size = n * config.initial_state.len();
 
         Ok(Self {
             network,
             symbol_map,
             frame_config,
             received_signals: vec![Vec::with_capacity(steps); num_links],
+            saved_states_buf: vec![0.0; state_size],
         })
     }
 
@@ -144,40 +149,53 @@ impl Demodulator {
         let dt = self.frame_config.dt;
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
         let num_links = channel_links.len();
+        let normalizer = (steps * num_links) as f64;
 
-        // Save reference network state before trying each candidate
-        let saved_network_states = self.network.states_flat().to_vec();
+        // Save reference network state into pre-allocated buffer (no heap alloc)
+        self.saved_states_buf
+            .copy_from_slice(self.network.states_flat());
 
         let mut best_symbol: Option<Symbol> = None;
         let mut best_mse = f64::INFINITY;
 
         for entry in self.symbol_map.entries() {
             // Restore reference network to saved state
-            self.network.restore_states(&saved_network_states)?;
+            self.network.restore_states(&self.saved_states_buf)?;
 
             // Set coupling to this candidate's epsilon
             self.network.set_coupling_strength(entry.epsilon);
 
             // Simulate reference network and extract predicted channel signals
-            let mut mse = 0.0;
+            // with early stopping: if cumulative MSE already exceeds best,
+            // skip remaining timesteps for this candidate.
+            let mut cumulative_sse = 0.0;
+            let best_sse_threshold = best_mse * normalizer;
+            let mut early_stopped = false;
+
             for step in 0..steps {
-                // Extract predicted channel link signals before stepping
                 for (link_idx, &node) in channel_links.iter().enumerate() {
                     let state = self.network.node_state(node)?;
                     let predicted = if dim > 1 { state[1] } else { state[0] };
                     let received = self.received_signals[link_idx][step];
                     let diff = predicted - received;
-                    mse += diff * diff;
+                    cumulative_sse += diff * diff;
+                }
+
+                // Early stopping: if partial SSE already exceeds best, no need to continue
+                if cumulative_sse > best_sse_threshold {
+                    early_stopped = true;
+                    break;
                 }
 
                 self.network.step(system, dt)?;
             }
 
-            mse /= (steps * num_links) as f64;
-
-            if mse < best_mse {
-                best_mse = mse;
-                best_symbol = Some(entry.symbol);
+            if !early_stopped {
+                let mse = cumulative_sse / normalizer;
+                if mse < best_mse {
+                    best_mse = mse;
+                    best_symbol = Some(entry.symbol);
+                }
             }
         }
 
@@ -186,7 +204,7 @@ impl Demodulator {
         })?;
 
         // Advance reference network with the winning ε for state continuity
-        self.network.restore_states(&saved_network_states)?;
+        self.network.restore_states(&self.saved_states_buf)?;
         let winner_epsilon = self.symbol_map.lookup_epsilon(winner)?;
         self.network.set_coupling_strength(winner_epsilon);
         for _t in 0..steps {
@@ -281,11 +299,12 @@ impl Demodulator {
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
         let num_links = channel_links.len();
 
-        let saved_network_states = self.network.states_flat().to_vec();
+        self.saved_states_buf
+            .copy_from_slice(self.network.states_flat());
 
         let mut detection_scores: Vec<(Symbol, f64)> = Vec::new();
         for entry in self.symbol_map.entries() {
-            self.network.restore_states(&saved_network_states)?;
+            self.network.restore_states(&self.saved_states_buf)?;
             self.network.set_coupling_strength(entry.epsilon);
 
             let mut mse = 0.0;
@@ -306,7 +325,7 @@ impl Demodulator {
         }
 
         // Restore original state (score_all should not advance the network)
-        self.network.restore_states(&saved_network_states)?;
+        self.network.restore_states(&self.saved_states_buf)?;
 
         detection_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(detection_scores)
