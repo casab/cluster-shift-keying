@@ -146,26 +146,26 @@ impl Demodulator {
         let num_links = channel_links.len();
 
         // Save reference network state before trying each candidate
-        let saved_states = self.network.states_flat().to_vec();
+        let saved_network_states = self.network.states_flat().to_vec();
 
         let mut best_symbol: Option<Symbol> = None;
         let mut best_mse = f64::INFINITY;
 
         for entry in self.symbol_map.entries() {
             // Restore reference network to saved state
-            self.network.restore_states(&saved_states)?;
+            self.network.restore_states(&saved_network_states)?;
 
             // Set coupling to this candidate's epsilon
             self.network.set_coupling_strength(entry.epsilon);
 
             // Simulate reference network and extract predicted channel signals
             let mut mse = 0.0;
-            for t in 0..steps {
+            for step in 0..steps {
                 // Extract predicted channel link signals before stepping
                 for (link_idx, &node) in channel_links.iter().enumerate() {
                     let state = self.network.node_state(node)?;
                     let predicted = if dim > 1 { state[1] } else { state[0] };
-                    let received = self.received_signals[link_idx][t];
+                    let received = self.received_signals[link_idx][step];
                     let diff = predicted - received;
                     mse += diff * diff;
                 }
@@ -186,7 +186,7 @@ impl Demodulator {
         })?;
 
         // Advance reference network with the winning ε for state continuity
-        self.network.restore_states(&saved_states)?;
+        self.network.restore_states(&saved_network_states)?;
         let winner_epsilon = self.symbol_map.lookup_epsilon(winner)?;
         self.network.set_coupling_strength(winner_epsilon);
         for _t in 0..steps {
@@ -281,19 +281,19 @@ impl Demodulator {
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
         let num_links = channel_links.len();
 
-        let saved_states = self.network.states_flat().to_vec();
+        let saved_network_states = self.network.states_flat().to_vec();
 
-        let mut scores: Vec<(Symbol, f64)> = Vec::new();
+        let mut detection_scores: Vec<(Symbol, f64)> = Vec::new();
         for entry in self.symbol_map.entries() {
-            self.network.restore_states(&saved_states)?;
+            self.network.restore_states(&saved_network_states)?;
             self.network.set_coupling_strength(entry.epsilon);
 
             let mut mse = 0.0;
-            for t in 0..steps {
+            for step in 0..steps {
                 for (link_idx, &node) in channel_links.iter().enumerate() {
                     let state = self.network.node_state(node)?;
                     let predicted = if dim > 1 { state[1] } else { state[0] };
-                    let received = self.received_signals[link_idx][t];
+                    let received = self.received_signals[link_idx][step];
                     let diff = predicted - received;
                     mse += diff * diff;
                 }
@@ -302,14 +302,14 @@ impl Demodulator {
 
             mse /= (steps * num_links) as f64;
             // Return negative MSE so higher = better (consistent with scoring convention)
-            scores.push((entry.symbol, -mse));
+            detection_scores.push((entry.symbol, -mse));
         }
 
         // Restore original state (score_all should not advance the network)
-        self.network.restore_states(&saved_states)?;
+        self.network.restore_states(&saved_network_states)?;
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(scores)
+        detection_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(detection_scores)
     }
 }
 
@@ -376,7 +376,8 @@ mod tests {
 
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol_map");
 
         let mod_config = crate::codec::modulator::ModulatorConfig {
             bit_period,
@@ -384,15 +385,16 @@ mod tests {
             initial_state: vec![1.0, 1.0, 1.0],
         };
 
-        let modulator = crate::codec::modulator::Modulator::new(&coupling, sm.clone(), &mod_config)
-            .expect("modulator");
+        let modulator =
+            crate::codec::modulator::Modulator::new(&coupling, symbol_map.clone(), &mod_config)
+                .expect("modulator");
 
         let frame_config = FrameConfig::new(bit_period, 0.0, 0.001).expect("frame config");
         let demod_config = DemodulatorConfig::default();
 
         let demodulator = Demodulator::new(
             &coupling,
-            sm,
+            symbol_map,
             frame_config,
             Box::new(RatioScoring::default()),
             &demod_config,
@@ -414,14 +416,15 @@ mod tests {
         let coupling = TopologyBuilder::ring(4).expect("ring4");
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
-        let fc = FrameConfig::new(5.0, 0.0, 0.001).expect("fc");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol_map");
+        let frame_config = FrameConfig::new(5.0, 0.0, 0.001).expect("frame_config");
         let config = DemodulatorConfig::default();
 
         let result = Demodulator::new(
             &coupling,
-            sm,
-            fc,
+            symbol_map,
+            frame_config,
             Box::new(RatioScoring::default()),
             &config,
         );
@@ -496,20 +499,21 @@ mod tests {
         let coupling = TopologyBuilder::octagon().expect("octagon");
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
-        let fc = FrameConfig::new(2.0, 0.0, 0.001).expect("fc");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol_map");
+        let frame_config = FrameConfig::new(2.0, 0.0, 0.001).expect("frame_config");
         let config = DemodulatorConfig::default();
 
         let chen = ChenSystem::default_paper();
-        let mut dec = DemodulatorWithSystem::new(
+        let mut decoder = DemodulatorWithSystem::new(
             &coupling,
-            sm,
-            fc,
+            symbol_map,
+            frame_config,
             Box::new(RatioScoring::default()),
             &config,
             Box::new(chen.clone()),
         )
-        .expect("dec");
+        .expect("decoder");
 
         // Encode a symbol first to get valid signals
         let sm2 = SymbolMap::new(
@@ -540,8 +544,8 @@ mod tests {
         modulator.encode_with_system(&0, &chen).expect("encode");
         let signals = modulator.output_signals().to_vec();
 
-        dec.feed_signals(&signals).expect("feed");
-        let symbol = dec.decode().expect("decode");
+        decoder.feed_signals(&signals).expect("feed");
+        let symbol = decoder.decode().expect("decode");
         assert!(symbol < 2);
     }
 

@@ -272,7 +272,8 @@ mod tests {
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
 
         // Channel links: nodes 0 and 3 (in different clusters for both patterns)
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol map");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol map");
 
         let config = ModulatorConfig {
             bit_period,
@@ -280,7 +281,7 @@ mod tests {
             initial_state: vec![1.0, 1.0, 1.0],
         };
 
-        let modulator = Modulator::new(&coupling, sm, &config).expect("modulator");
+        let modulator = Modulator::new(&coupling, symbol_map, &config).expect("modulator");
         (modulator, chen)
     }
 
@@ -365,7 +366,7 @@ mod tests {
         let coupling = TopologyBuilder::octagon().expect("octagon");
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
+        let symbol_map = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
         let config = ModulatorConfig {
             bit_period: 0.5,
             dt: 0.001,
@@ -374,7 +375,7 @@ mod tests {
 
         let chen = ChenSystem::default_paper();
         let mut enc =
-            ModulatorWithSystem::new(&coupling, sm, &config, Box::new(chen)).expect("enc");
+            ModulatorWithSystem::new(&coupling, symbol_map, &config, Box::new(chen)).expect("enc");
 
         enc.encode(&0).expect("encode");
         let signals = enc.output_signals();
@@ -387,10 +388,10 @@ mod tests {
         let coupling = TopologyBuilder::ring(4).expect("ring4");
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("8 nodes");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("8 nodes");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
+        let symbol_map = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
         let config = ModulatorConfig::default();
 
-        let result = Modulator::new(&coupling, sm, &config);
+        let result = Modulator::new(&coupling, symbol_map, &config);
         assert!(result.is_err());
     }
 
