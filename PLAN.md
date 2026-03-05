@@ -17,7 +17,7 @@
 | 11 | Channel Models | **DONE** |
 | 12 | BER Evaluation & Metrics | **DONE** |
 | 13 | End-to-End Pipeline & Configuration | **DONE** |
-| 14 | Examples & Paper Reproduction | TODO |
+| 14 | Examples & Paper Reproduction | **DONE** |
 | 15 | Performance & Benchmarks | TODO |
 | 16 | Extensibility Hooks & Future-Proofing | TODO |
 
@@ -590,6 +590,20 @@ cluster-shift-keying/
 5. Add brief doc comments on all public API items (not full documentation, just `///` summaries)
 
 **Tests:** Examples compile and run without panicking
+
+**Status: DONE** — Commit `phase 14: add examples and doc comments for public API`
+- Three runnable examples with clap CLI:
+  - `basic_transmission`: transmits ASCII message bits through CLSK using low-level
+    Modulator/Demodulator API, displays TX/RX bits and reconstructed message
+  - `octagon_demo`: reproduces paper's 8-node octagon with cluster pattern switching,
+    displays per-symbol sync energy (intra/inter-cluster), optional CSV output
+  - `ber_sweep`: sweeps noise σ and computes SER at each level, CSV output for plotting
+- `clap` (v4, derive feature) added as dev-dependency
+- Doc comments added to remaining undocumented public items (utils module, CodecChain fields)
+- All examples compile and run without panicking
+- 272 tests passing, clippy and fmt clean
+- Deviations: `basic_transmission` uses low-level Modulator/Demodulator API (not `Simulation`)
+  to transmit specific message bits rather than random symbols
 
 ---
 
