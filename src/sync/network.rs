@@ -168,6 +168,21 @@ impl CoupledNetwork {
             .collect()
     }
 
+    /// Restore all node states from a flat slice (n*dim elements, node-major order).
+    ///
+    /// The slice must have exactly `n * dim` elements matching the network size.
+    pub fn restore_states(&mut self, flat_states: &[f64]) -> Result<(), SyncError> {
+        let expected = self.n * self.dim;
+        if flat_states.len() != expected {
+            return Err(SyncError::NodeCountMismatch {
+                expected,
+                got: flat_states.len(),
+            });
+        }
+        self.states.copy_from_slice(flat_states);
+        Ok(())
+    }
+
     /// Set the state of node `i`.
     pub fn set_node_state(&mut self, i: usize, state: &[f64]) -> Result<(), SyncError> {
         if i >= self.n {

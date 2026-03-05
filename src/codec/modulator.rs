@@ -71,7 +71,18 @@ impl Modulator {
             });
         }
 
-        let network = CoupledNetwork::new(coupling, &config.initial_state, None)?;
+        // Small deterministic perturbations break the initial symmetry so that
+        // the coupling term ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ) is non-zero and different
+        // coupling strengths produce distinguishable dynamics.
+        let dim = config.initial_state.len();
+        let perturbations: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..dim)
+                    .map(|d| 0.01 * ((i * dim + d) as f64 * 0.37).sin())
+                    .collect()
+            })
+            .collect();
+        let network = CoupledNetwork::new(coupling, &config.initial_state, Some(&perturbations))?;
 
         let steps_per_bit = (config.bit_period / config.dt).round() as usize;
         if steps_per_bit == 0 {
