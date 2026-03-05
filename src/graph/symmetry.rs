@@ -62,7 +62,7 @@ impl SymmetryDetector {
         }
 
         // Precompute adjacency as boolean matrix for fast comparison
-        let adj_bool: Vec<Vec<bool>> = (0..n)
+        let adjacency_bool: Vec<Vec<bool>> = (0..n)
             .map(|i| {
                 (0..n)
                     .map(|j| adjacency.get(i, j).is_ok_and(|v| v.abs() > 1e-12))
@@ -71,7 +71,7 @@ impl SymmetryDetector {
             .collect();
 
         let mut ctx = AutoSearchCtx {
-            adj: &adj_bool,
+            adjacency: &adjacency_bool,
             orbits: &orbits,
             orbit_of: &orbit_of,
             perm: vec![0usize; n],
@@ -120,16 +120,16 @@ impl SymmetryDetector {
         // Iterative refinement
         loop {
             let mut new_colors = vec![0usize; n];
-            let mut sig_map: HashMap<(usize, Vec<usize>), usize> = HashMap::new();
-            let mut nc = 0;
+            let mut signature_map: HashMap<(usize, Vec<usize>), usize> = HashMap::new();
+            let mut next_color = 0;
 
             for i in 0..n {
                 let mut nbr_colors: Vec<usize> = neighbors[i].iter().map(|&j| colors[j]).collect();
                 nbr_colors.sort();
-                let sig = (colors[i], nbr_colors);
-                let c = *sig_map.entry(sig).or_insert_with(|| {
-                    let c = nc;
-                    nc += 1;
+                let signature = (colors[i], nbr_colors);
+                let c = *signature_map.entry(signature).or_insert_with(|| {
+                    let c = next_color;
+                    next_color += 1;
                     c
                 });
                 new_colors[i] = c;
@@ -148,7 +148,7 @@ impl SymmetryDetector {
 /// Internal context for automorphism backtracking search,
 /// bundling related state to reduce parameter count.
 struct AutoSearchCtx<'a> {
-    adj: &'a [Vec<bool>],
+    adjacency: &'a [Vec<bool>],
     orbits: &'a [Vec<usize>],
     orbit_of: &'a [usize],
     perm: Vec<usize>,
@@ -176,7 +176,7 @@ impl AutoSearchCtx<'_> {
             // Check adjacency consistency with all already-assigned nodes
             let mut consistent = true;
             for i in 0..pos {
-                if self.adj[pos][i] != self.adj[candidate][self.perm[i]] {
+                if self.adjacency[pos][i] != self.adjacency[candidate][self.perm[i]] {
                     consistent = false;
                     break;
                 }

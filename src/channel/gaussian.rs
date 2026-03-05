@@ -84,15 +84,15 @@ impl ChannelModel for GaussianChannel {
 
         match self.mode {
             NoiseMode::Additive => {
-                for (out, &inp) in output.iter_mut().zip(input.iter()) {
+                for (output_sample, &input_sample) in output.iter_mut().zip(input.iter()) {
                     let noise = self.distribution.sample(&mut self.rng);
-                    *out = inp + noise;
+                    *output_sample = input_sample + noise;
                 }
             }
             NoiseMode::Multiplicative => {
-                for (out, &inp) in output.iter_mut().zip(input.iter()) {
+                for (output_sample, &input_sample) in output.iter_mut().zip(input.iter()) {
                     let noise = self.distribution.sample(&mut self.rng);
-                    *out = inp * (1.0 + noise);
+                    *output_sample = input_sample * (1.0 + noise);
                 }
             }
         }

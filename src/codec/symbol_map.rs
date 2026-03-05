@@ -195,29 +195,29 @@ mod tests {
     fn symbol_map_creation() {
         let (p0, p1) = two_cluster_patterns();
         // Channel links: nodes 0 and 4 (in different clusters for both patterns)
-        let sm =
+        let symbol_map =
             SymbolMap::new(vec![(0, p0, 10.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol map");
 
-        assert_eq!(sm.alphabet_size(), 2);
-        assert!((sm.lookup_epsilon(0).expect("eps0") - 10.0).abs() < 1e-15);
-        assert!((sm.lookup_epsilon(1).expect("eps1") - 12.0).abs() < 1e-15);
+        assert_eq!(symbol_map.alphabet_size(), 2);
+        assert!((symbol_map.lookup_epsilon(0).expect("eps0") - 10.0).abs() < 1e-15);
+        assert!((symbol_map.lookup_epsilon(1).expect("eps1") - 12.0).abs() < 1e-15);
     }
 
     #[test]
     fn symbol_map_binary_helper() {
         let (p0, p1) = two_cluster_patterns();
-        let sm = SymbolMap::binary(p0, 10.0, p1, 12.0, vec![0, 3]).expect("binary map");
-        assert_eq!(sm.alphabet_size(), 2);
+        let symbol_map = SymbolMap::binary(p0, 10.0, p1, 12.0, vec![0, 3]).expect("binary map");
+        assert_eq!(symbol_map.alphabet_size(), 2);
     }
 
     #[test]
     fn unknown_symbol_error() {
         let (p0, p1) = two_cluster_patterns();
-        let sm =
+        let symbol_map =
             SymbolMap::new(vec![(0, p0, 10.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol map");
 
-        assert!(sm.lookup_epsilon(2).is_err());
-        assert!(sm.lookup_pattern(5).is_err());
+        assert!(symbol_map.lookup_epsilon(2).is_err());
+        assert!(symbol_map.lookup_pattern(5).is_err());
     }
 
     #[test]
@@ -274,20 +274,20 @@ mod tests {
     fn lookup_pattern() {
         let (p0, p1) = two_cluster_patterns();
         let p0_clone = p0.clone();
-        let sm =
+        let symbol_map =
             SymbolMap::new(vec![(0, p0, 10.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol map");
 
-        let pattern = sm.lookup_pattern(0).expect("pattern 0");
+        let pattern = symbol_map.lookup_pattern(0).expect("pattern 0");
         assert_eq!(*pattern, p0_clone);
     }
 
     #[test]
     fn channel_links_accessor() {
         let (p0, p1) = two_cluster_patterns();
-        let sm =
+        let symbol_map =
             SymbolMap::new(vec![(0, p0, 10.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol map");
 
-        assert_eq!(sm.channel_links(), &[0, 3]);
+        assert_eq!(symbol_map.channel_links(), &[0, 3]);
     }
 
     #[test]

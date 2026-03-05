@@ -98,7 +98,7 @@ impl Simulation {
         let symbol_errors = tx_symbols
             .iter()
             .zip(rx_symbols.iter())
-            .filter(|(a, b)| a != b)
+            .filter(|(tx_sym, rx_sym)| tx_sym != rx_sym)
             .count();
 
         Ok(SimulationResult {
@@ -148,8 +148,8 @@ impl Simulation {
             entries.push((i, pattern, sym_cfg.epsilon));
         }
 
-        let sm = SymbolMap::new(entries, self.config.coupling.channel_links.clone())?;
-        Ok(sm)
+        let symbol_map = SymbolMap::new(entries, self.config.coupling.channel_links.clone())?;
+        Ok(symbol_map)
     }
 
     fn build_channel(&self) -> Result<Box<dyn ChannelModel>, PipelineError> {
@@ -224,9 +224,9 @@ mod tests {
     fn build_symbol_map_default() {
         let config = SimulationConfig::default_paper();
         let sim = Simulation::new(config).expect("sim");
-        let sm = sim.build_symbol_map().expect("build symbol map");
-        assert_eq!(sm.alphabet_size(), 2);
-        assert_eq!(sm.channel_links(), &[0, 3]);
+        let symbol_map = sim.build_symbol_map().expect("build symbol map");
+        assert_eq!(symbol_map.alphabet_size(), 2);
+        assert_eq!(symbol_map.channel_links(), &[0, 3]);
     }
 
     #[test]
@@ -254,9 +254,9 @@ mod tests {
     fn generate_symbols_deterministic() {
         let config = SimulationConfig::default_paper();
         let sim = Simulation::new(config).expect("sim");
-        let sm = sim.build_symbol_map().expect("sm");
-        let symbols1 = sim.generate_symbols(&sm);
-        let symbols2 = sim.generate_symbols(&sm);
+        let symbol_map = sim.build_symbol_map().expect("symbol_map");
+        let symbols1 = sim.generate_symbols(&symbol_map);
+        let symbols2 = sim.generate_symbols(&symbol_map);
         assert_eq!(symbols1, symbols2, "same seed should produce same symbols");
         assert_eq!(symbols1.len(), 100);
         assert!(symbols1.iter().all(|&s| s < 2));

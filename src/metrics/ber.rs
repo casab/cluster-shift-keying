@@ -111,7 +111,11 @@ impl TrialResult {
     /// Create a new trial result from tx/rx symbol sequences.
     pub fn from_sequences(tx: &[usize], rx: &[usize]) -> Result<Self, MetricsError> {
         let ser = BerEvaluator::evaluate(tx, rx)?;
-        let symbol_errors = tx.iter().zip(rx.iter()).filter(|(a, b)| a != b).count();
+        let symbol_errors = tx
+            .iter()
+            .zip(rx.iter())
+            .filter(|(tx_sym, rx_sym)| tx_sym != rx_sym)
+            .count();
         Ok(Self {
             num_symbols: tx.len(),
             symbol_errors,

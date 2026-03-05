@@ -2,14 +2,20 @@ use super::error::SyncError;
 use crate::dynamics::traits::DynamicalSystem;
 use crate::graph::CouplingMatrix;
 
+/// A neighbor entry: (node_index, adjacency_weight).
+type Neighbor = (usize, f64);
+
 /// Coupled network of identical dynamical systems.
 ///
 /// Simulates N nodes coupled through the network equation:
 ///
-///   ẋᵢ = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ xⱼ
+///   ẋᵢ = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
 ///
 /// where f is the isolated node dynamics, ε is the coupling strength,
 /// ξᵢⱼ are adjacency weights, and Γ is the inner coupling matrix.
+///
+/// Uses sparse neighbor lists so the per-step cost is O(N·deg·D²) instead
+/// of O(N²·D²), where deg is the average node degree.
 pub struct CoupledNetwork {
     /// State vectors for all nodes, stored flat: [x₀₀, x₀₁, ..., x₀ₐ, x₁₀, ...].
     states: Vec<f64>,
@@ -17,8 +23,8 @@ pub struct CoupledNetwork {
     n: usize,
     /// Oscillator dimension.
     dim: usize,
-    /// Adjacency matrix (n × n) cached as flat row-major.
-    adjacency: Vec<f64>,
+    /// Sparse neighbor lists: neighbors[i] contains (j, ξ_ij) for all j where ξ_ij ≠ 0.
+    neighbors: Vec<Vec<Neighbor>>,
     /// Inner coupling matrix (dim × dim) cached as flat row-major.
     gamma: Vec<f64>,
     /// Global coupling strength ε.
@@ -28,11 +34,11 @@ pub struct CoupledNetwork {
     k2: Vec<f64>,
     k3: Vec<f64>,
     k4: Vec<f64>,
-    tmp: Vec<f64>,
+    scratch: Vec<f64>,
     /// Scratch buffer for single-node derivative.
-    deriv_buf: Vec<f64>,
+    derivative_scratch: Vec<f64>,
     /// Scratch buffer for coupling term of a single node.
-    coupling_buf: Vec<f64>,
+    coupling_scratch: Vec<f64>,
 }
 
 impl CoupledNetwork {
@@ -88,12 +94,17 @@ impl CoupledNetwork {
             }
         }
 
-        // Cache adjacency as flat array
-        let mut adjacency = vec![0.0; n * n];
+        // Build sparse neighbor lists from adjacency matrix
+        let mut neighbors = Vec::with_capacity(n);
         for i in 0..n {
+            let mut node_neighbors = Vec::new();
             for j in 0..n {
-                adjacency[i * n + j] = coupling.adjacency().get(i, j)?;
+                let weight = coupling.adjacency().get(i, j)?;
+                if weight.abs() > 1e-15 {
+                    node_neighbors.push((j, weight));
+                }
             }
+            neighbors.push(node_neighbors);
         }
 
         // Cache inner coupling as flat array
@@ -108,16 +119,16 @@ impl CoupledNetwork {
             states,
             n,
             dim,
-            adjacency,
+            neighbors,
             gamma,
             epsilon: coupling.epsilon(),
             k1: vec![0.0; total],
             k2: vec![0.0; total],
             k3: vec![0.0; total],
             k4: vec![0.0; total],
-            tmp: vec![0.0; total],
-            deriv_buf: vec![0.0; dim],
-            coupling_buf: vec![0.0; dim],
+            scratch: vec![0.0; total],
+            derivative_scratch: vec![0.0; dim],
+            coupling_scratch: vec![0.0; dim],
         })
     }
 
@@ -168,6 +179,21 @@ impl CoupledNetwork {
             .collect()
     }
 
+    /// Restore all node states from a flat slice (n*dim elements, node-major order).
+    ///
+    /// The slice must have exactly `n * dim` elements matching the network size.
+    pub fn restore_states(&mut self, flat_states: &[f64]) -> Result<(), SyncError> {
+        let expected = self.n * self.dim;
+        if flat_states.len() != expected {
+            return Err(SyncError::NodeCountMismatch {
+                expected,
+                got: flat_states.len(),
+            });
+        }
+        self.states.copy_from_slice(flat_states);
+        Ok(())
+    }
+
     /// Set the state of node `i`.
     pub fn set_node_state(&mut self, i: usize, state: &[f64]) -> Result<(), SyncError> {
         if i >= self.n {
@@ -201,65 +227,61 @@ impl CoupledNetwork {
         compute_coupled_derivative(
             system,
             &self.states,
-            &self.adjacency,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k1,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // k2 = F(states + dt/2 * k1)
         for i in 0..total {
-            self.tmp[i] = self.states[i] + 0.5 * dt * self.k1[i];
+            self.scratch[i] = self.states[i] + 0.5 * dt * self.k1[i];
         }
         compute_coupled_derivative(
             system,
-            &self.tmp,
-            &self.adjacency,
+            &self.scratch,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k2,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // k3 = F(states + dt/2 * k2)
         for i in 0..total {
-            self.tmp[i] = self.states[i] + 0.5 * dt * self.k2[i];
+            self.scratch[i] = self.states[i] + 0.5 * dt * self.k2[i];
         }
         compute_coupled_derivative(
             system,
-            &self.tmp,
-            &self.adjacency,
+            &self.scratch,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k3,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // k4 = F(states + dt * k3)
         for i in 0..total {
-            self.tmp[i] = self.states[i] + dt * self.k3[i];
+            self.scratch[i] = self.states[i] + dt * self.k3[i];
         }
         compute_coupled_derivative(
             system,
-            &self.tmp,
-            &self.adjacency,
+            &self.scratch,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k4,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // Update: states += dt/6 * (k1 + 2*k2 + 2*k3 + k4)
@@ -313,53 +335,49 @@ impl CoupledNetwork {
     }
 }
 
-/// Compute the full coupled derivative for all nodes (free function to satisfy borrow checker).
+/// Compute the full coupled derivative for all nodes using sparse neighbor lists.
 ///
 /// Uses diffusive coupling (standard MSF convention):
 ///   F_i = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
 ///
-/// This is equivalent to using the Laplacian: F_i = f(xᵢ) - ε Σⱼ L_ij Γ xⱼ
+/// Complexity: O(N · deg · D²) where deg is the average node degree,
+/// compared to O(N² · D²) with a dense adjacency scan.
 #[allow(clippy::too_many_arguments)]
 fn compute_coupled_derivative(
     system: &dyn DynamicalSystem,
     state: &[f64],
-    adjacency: &[f64],
+    neighbors: &[Vec<Neighbor>],
     gamma: &[f64],
-    n: usize,
     dim: usize,
     epsilon: f64,
     output: &mut [f64],
-    deriv_buf: &mut [f64],
-    coupling_buf: &mut [f64],
+    derivative_scratch: &mut [f64],
+    coupling_scratch: &mut [f64],
 ) -> Result<(), SyncError> {
-    for i in 0..n {
+    for (i, node_neighbors) in neighbors.iter().enumerate() {
         let offset_i = i * dim;
 
         // f(xᵢ)
-        system.derivative(&state[offset_i..offset_i + dim], deriv_buf)?;
+        system.derivative(&state[offset_i..offset_i + dim], derivative_scratch)?;
 
         // Diffusive coupling: ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
-        coupling_buf.fill(0.0);
-        for j in 0..n {
-            let xi_ij = adjacency[i * n + j];
-            if xi_ij.abs() < 1e-15 {
-                continue;
-            }
+        coupling_scratch.fill(0.0);
+        for &(j, xi_ij) in node_neighbors {
             let offset_j = j * dim;
             // Γ (xⱼ - xᵢ) then scale by ξᵢⱼ
             for d in 0..dim {
-                let mut gamma_diff_d = 0.0;
+                let mut gamma_diff_component = 0.0;
                 for k in 0..dim {
-                    gamma_diff_d +=
+                    gamma_diff_component +=
                         gamma[d * dim + k] * (state[offset_j + k] - state[offset_i + k]);
                 }
-                coupling_buf[d] += xi_ij * gamma_diff_d;
+                coupling_scratch[d] += xi_ij * gamma_diff_component;
             }
         }
 
         // F_i = f(xᵢ) + ε * coupling
         for d in 0..dim {
-            output[offset_i + d] = deriv_buf[d] + epsilon * coupling_buf[d];
+            output[offset_i + d] = derivative_scratch[d] + epsilon * coupling_scratch[d];
         }
     }
 
@@ -512,5 +530,36 @@ mod tests {
             same_err < diff_err * 1.5 || same_err < 1.0,
             "same-cluster error ({same_err}) should be smaller than cross-cluster ({diff_err})"
         );
+    }
+
+    #[test]
+    fn sparse_neighbor_lists_correct() {
+        let coupling = TopologyBuilder::octagon().expect("octagon");
+        let net = CoupledNetwork::new(&coupling, &[1.0, 1.0, 1.0], None).expect("net");
+        // C₈ ring: each node has exactly 2 neighbors
+        for i in 0..8 {
+            assert_eq!(
+                net.neighbors[i].len(),
+                2,
+                "node {i} should have 2 neighbors, got {}",
+                net.neighbors[i].len()
+            );
+        }
+        // Node 0 should neighbor nodes 1 and 7
+        let n0: Vec<usize> = net.neighbors[0].iter().map(|&(j, _)| j).collect();
+        assert!(n0.contains(&1), "node 0 should neighbor node 1");
+        assert!(n0.contains(&7), "node 0 should neighbor node 7");
+    }
+
+    #[test]
+    fn large_ring_scales() {
+        // Verify correctness at N=64 (would be slow with dense O(N²))
+        let coupling = TopologyBuilder::ring(64).expect("ring64");
+        let net = CoupledNetwork::new(&coupling, &[1.0, 1.0, 1.0], None).expect("net");
+        assert_eq!(net.node_count(), 64);
+        // Each node in a ring has 2 neighbors
+        for i in 0..64 {
+            assert_eq!(net.neighbors[i].len(), 2);
+        }
     }
 }

@@ -4,7 +4,6 @@ use super::symbol_map::{Symbol, SymbolMap};
 use super::traits::Decoder;
 use crate::dynamics::traits::DynamicalSystem;
 use crate::graph::CouplingMatrix;
-use crate::metrics::sync_energy::{ScoringFunction, SyncEnergyDetector};
 use crate::sync::CoupledNetwork;
 
 /// Configuration for the CLSK demodulator.
@@ -22,39 +21,50 @@ impl Default for DemodulatorConfig {
     }
 }
 
-/// CLSK demodulator: decodes symbols from received channel link signals.
+/// CLSK demodulator: decodes symbols from received channel link signals
+/// using matched filter detection.
 ///
-/// The receiver operates a coupled network that mirrors the transmitter topology.
-/// For each bit period:
-/// 1. Feed channel link signals into the receiver network
-/// 2. Integrate the network for one bit period, recording trajectories
-/// 3. Compute the synchronization energy matrix from trajectories
-/// 4. For each candidate symbol, score the energy matrix against the pattern
-/// 5. Select the symbol with the highest score
+/// The demodulator maintains a **reference network** that mirrors the
+/// transmitter's state. For each bit period:
+/// 1. For each candidate symbol (ε_m), save reference state, set ε_m,
+///    simulate for T_b, and extract predicted channel link signals.
+/// 2. Compute MSE between predicted and received signals.
+/// 3. Select the candidate with the lowest MSE (best match).
+/// 4. Advance the reference network with the winning ε to maintain
+///    state continuity for the next symbol.
+///
+/// This works because the reference network tracks the TX state (assuming
+/// correct previous detections). The correct ε produces signals matching
+/// the received ones; incorrect ε produces different signals.
 pub struct Demodulator {
-    /// Receiver coupled network.
+    /// Reference network mirroring the transmitter state.
     network: CoupledNetwork,
     /// Symbol-to-pattern/epsilon mapping.
     symbol_map: SymbolMap,
     /// Frame configuration.
     frame_config: FrameConfig,
-    /// Scoring function for symbol detection.
-    scorer: Box<dyn ScoringFunction>,
     /// Buffer for received channel link signals (one per link, per bit period).
     /// Indexed as received_signals[link_index][time_step].
     received_signals: Vec<Vec<f64>>,
+    /// Pre-allocated buffer for saving/restoring network states, avoiding
+    /// per-symbol heap allocation in detect_symbol().
+    saved_states_buf: Vec<f64>,
 }
 
 impl Demodulator {
     /// Create a new CLSK demodulator.
     ///
-    /// The receiver network uses the same topology as the transmitter.
-    /// The scoring function determines how sync energy maps to symbol decisions.
+    /// The reference network uses the same topology and initial conditions
+    /// as the transmitter (including deterministic perturbations) so it can
+    /// predict channel link signals for each candidate symbol.
+    ///
+    /// The `_scorer` parameter is accepted for API compatibility but is no
+    /// longer used; detection is performed via matched filter (MSE).
     pub fn new(
         coupling: &CouplingMatrix,
         symbol_map: SymbolMap,
         frame_config: FrameConfig,
-        scorer: Box<dyn ScoringFunction>,
+        _scorer: Box<dyn crate::metrics::sync_energy::ScoringFunction>,
         config: &DemodulatorConfig,
     ) -> Result<Self, CodecError> {
         let n = coupling.node_count();
@@ -67,16 +77,27 @@ impl Demodulator {
             });
         }
 
-        let network = CoupledNetwork::new(coupling, &config.initial_state, None)?;
+        // Same deterministic perturbations as the modulator, so the reference
+        // network mirrors the TX state exactly.
+        let dim = config.initial_state.len();
+        let perturbations: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..dim)
+                    .map(|d| 0.01 * ((i * dim + d) as f64 * 0.37).sin())
+                    .collect()
+            })
+            .collect();
+        let network = CoupledNetwork::new(coupling, &config.initial_state, Some(&perturbations))?;
         let num_links = symbol_map.channel_links().len();
         let steps = frame_config.steps_per_bit();
+        let state_size = n * config.initial_state.len();
 
         Ok(Self {
             network,
             symbol_map,
             frame_config,
-            scorer,
             received_signals: vec![Vec::with_capacity(steps); num_links],
+            saved_states_buf: vec![0.0; state_size],
         })
     }
 
@@ -111,68 +132,86 @@ impl Demodulator {
         Ok(())
     }
 
-    /// Detect the symbol from the currently fed signals.
+    /// Detect the symbol from the currently fed signals using matched filter.
     ///
-    /// Integrates the receiver network while injecting channel link signals,
-    /// then scores the resulting sync energy against all candidate patterns.
+    /// For each candidate symbol (ε_m):
+    /// 1. Save reference network state
+    /// 2. Set coupling to ε_m, simulate for T_b
+    /// 3. Extract predicted channel link signals
+    /// 4. Compute MSE between predicted and received signals
+    ///
+    /// The candidate with the lowest MSE is selected. After detection,
+    /// the reference network is advanced with the winning ε for state
+    /// continuity.
     pub fn detect_symbol(&mut self, system: &dyn DynamicalSystem) -> Result<Symbol, CodecError> {
         let steps = self.frame_config.steps_per_bit();
-        let n = self.network.node_count();
         let dim = self.network.dimension();
         let dt = self.frame_config.dt;
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
+        let num_links = channel_links.len();
+        let normalizer = (steps * num_links) as f64;
 
-        // Record trajectory snapshots for energy computation
-        let mut snapshots: Vec<Vec<f64>> = Vec::with_capacity(steps);
+        // Save reference network state into pre-allocated buffer (no heap alloc)
+        self.saved_states_buf
+            .copy_from_slice(self.network.states_flat());
 
-        for t in 0..steps {
-            // Inject channel link signals into receiver network
-            for (link_idx, &node) in channel_links.iter().enumerate() {
-                let signal_val = self.received_signals[link_idx][t];
-                let mut state = self.network.node_state(node)?.to_vec();
-                // Replace the coupled state variable (index 1 for standard Chen+Γ)
-                if dim > 1 {
-                    state[1] = signal_val;
-                } else {
-                    state[0] = signal_val;
+        let mut best_symbol: Option<Symbol> = None;
+        let mut best_mse = f64::INFINITY;
+
+        for entry in self.symbol_map.entries() {
+            // Restore reference network to saved state
+            self.network.restore_states(&self.saved_states_buf)?;
+
+            // Set coupling to this candidate's epsilon
+            self.network.set_coupling_strength(entry.epsilon);
+
+            // Simulate reference network and extract predicted channel signals
+            // with early stopping: if cumulative MSE already exceeds best,
+            // skip remaining timesteps for this candidate.
+            let mut cumulative_sse = 0.0;
+            let best_sse_threshold = best_mse * normalizer;
+            let mut early_stopped = false;
+
+            for step in 0..steps {
+                for (link_idx, &node) in channel_links.iter().enumerate() {
+                    let state = self.network.node_state(node)?;
+                    let predicted = if dim > 1 { state[1] } else { state[0] };
+                    let received = self.received_signals[link_idx][step];
+                    let diff = predicted - received;
+                    cumulative_sse += diff * diff;
                 }
-                self.network.set_node_state(node, &state)?;
+
+                // Early stopping: if partial SSE already exceeds best, no need to continue
+                if cumulative_sse > best_sse_threshold {
+                    early_stopped = true;
+                    break;
+                }
+
+                self.network.step(system, dt)?;
             }
 
-            // Record current state before stepping
-            snapshots.push(self.network.states_flat().to_vec());
+            if !early_stopped {
+                let mse = cumulative_sse / normalizer;
+                if mse < best_mse {
+                    best_mse = mse;
+                    best_symbol = Some(entry.symbol);
+                }
+            }
+        }
 
-            // Advance the network
+        let winner = best_symbol.ok_or(CodecError::DetectionFailed {
+            reason: "no symbols in symbol map".to_string(),
+        })?;
+
+        // Advance reference network with the winning ε for state continuity
+        self.network.restore_states(&self.saved_states_buf)?;
+        let winner_epsilon = self.symbol_map.lookup_epsilon(winner)?;
+        self.network.set_coupling_strength(winner_epsilon);
+        for _t in 0..steps {
             self.network.step(system, dt)?;
         }
 
-        // Compute sync energy matrix
-        let energy = SyncEnergyDetector::compute(&snapshots, n, dim, dt).map_err(|e| {
-            CodecError::DetectionFailed {
-                reason: format!("sync energy computation failed: {e}"),
-            }
-        })?;
-
-        // Score each candidate symbol
-        let mut best_symbol: Option<Symbol> = None;
-        let mut best_score = f64::NEG_INFINITY;
-
-        for entry in self.symbol_map.entries() {
-            let score = self.scorer.score(&energy, &entry.pattern).map_err(|e| {
-                CodecError::DetectionFailed {
-                    reason: format!("scoring failed for symbol {}: {e}", entry.symbol),
-                }
-            })?;
-
-            if score > best_score {
-                best_score = score;
-                best_symbol = Some(entry.symbol);
-            }
-        }
-
-        best_symbol.ok_or(CodecError::DetectionFailed {
-            reason: "no symbols in symbol map".to_string(),
-        })
+        Ok(winner)
     }
 
     /// Decode a sequence of symbols from concatenated channel link signals.
@@ -243,55 +282,53 @@ impl Demodulator {
         &self.network
     }
 
-    /// Get the detection scores for each candidate symbol given current signals.
+    /// Get the detection scores (negative MSE) for each candidate symbol.
     ///
-    /// Returns (symbol, score) pairs sorted by score descending.
+    /// For each candidate, simulates the reference network at that candidate's ε
+    /// and computes MSE against received signals. Returns (symbol, -mse) pairs
+    /// sorted by score descending (lowest MSE first).
+    ///
+    /// Does not advance the reference network state.
     pub fn score_all(
         &mut self,
         system: &dyn DynamicalSystem,
     ) -> Result<Vec<(Symbol, f64)>, CodecError> {
         let steps = self.frame_config.steps_per_bit();
-        let n = self.network.node_count();
         let dim = self.network.dimension();
         let dt = self.frame_config.dt;
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
+        let num_links = channel_links.len();
 
-        let mut snapshots: Vec<Vec<f64>> = Vec::with_capacity(steps);
+        self.saved_states_buf
+            .copy_from_slice(self.network.states_flat());
 
-        for t in 0..steps {
-            for (link_idx, &node) in channel_links.iter().enumerate() {
-                let signal_val = self.received_signals[link_idx][t];
-                let mut state = self.network.node_state(node)?.to_vec();
-                if dim > 1 {
-                    state[1] = signal_val;
-                } else {
-                    state[0] = signal_val;
-                }
-                self.network.set_node_state(node, &state)?;
-            }
-
-            snapshots.push(self.network.states_flat().to_vec());
-            self.network.step(system, dt)?;
-        }
-
-        let energy = SyncEnergyDetector::compute(&snapshots, n, dim, dt).map_err(|e| {
-            CodecError::DetectionFailed {
-                reason: format!("sync energy computation failed: {e}"),
-            }
-        })?;
-
-        let mut scores: Vec<(Symbol, f64)> = Vec::new();
+        let mut detection_scores: Vec<(Symbol, f64)> = Vec::new();
         for entry in self.symbol_map.entries() {
-            let score = self.scorer.score(&energy, &entry.pattern).map_err(|e| {
-                CodecError::DetectionFailed {
-                    reason: format!("scoring failed for symbol {}: {e}", entry.symbol),
+            self.network.restore_states(&self.saved_states_buf)?;
+            self.network.set_coupling_strength(entry.epsilon);
+
+            let mut mse = 0.0;
+            for step in 0..steps {
+                for (link_idx, &node) in channel_links.iter().enumerate() {
+                    let state = self.network.node_state(node)?;
+                    let predicted = if dim > 1 { state[1] } else { state[0] };
+                    let received = self.received_signals[link_idx][step];
+                    let diff = predicted - received;
+                    mse += diff * diff;
                 }
-            })?;
-            scores.push((entry.symbol, score));
+                self.network.step(system, dt)?;
+            }
+
+            mse /= (steps * num_links) as f64;
+            // Return negative MSE so higher = better (consistent with scoring convention)
+            detection_scores.push((entry.symbol, -mse));
         }
 
-        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(scores)
+        // Restore original state (score_all should not advance the network)
+        self.network.restore_states(&self.saved_states_buf)?;
+
+        detection_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(detection_scores)
     }
 }
 
@@ -307,7 +344,7 @@ impl DemodulatorWithSystem {
         coupling: &CouplingMatrix,
         symbol_map: SymbolMap,
         frame_config: FrameConfig,
-        scorer: Box<dyn ScoringFunction>,
+        scorer: Box<dyn crate::metrics::sync_energy::ScoringFunction>,
         config: &DemodulatorConfig,
         system: Box<dyn DynamicalSystem>,
     ) -> Result<Self, CodecError> {
@@ -358,7 +395,8 @@ mod tests {
 
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol_map");
 
         let mod_config = crate::codec::modulator::ModulatorConfig {
             bit_period,
@@ -366,15 +404,16 @@ mod tests {
             initial_state: vec![1.0, 1.0, 1.0],
         };
 
-        let modulator = crate::codec::modulator::Modulator::new(&coupling, sm.clone(), &mod_config)
-            .expect("modulator");
+        let modulator =
+            crate::codec::modulator::Modulator::new(&coupling, symbol_map.clone(), &mod_config)
+                .expect("modulator");
 
         let frame_config = FrameConfig::new(bit_period, 0.0, 0.001).expect("frame config");
         let demod_config = DemodulatorConfig::default();
 
         let demodulator = Demodulator::new(
             &coupling,
-            sm,
+            symbol_map,
             frame_config,
             Box::new(RatioScoring::default()),
             &demod_config,
@@ -396,14 +435,15 @@ mod tests {
         let coupling = TopologyBuilder::ring(4).expect("ring4");
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
-        let fc = FrameConfig::new(5.0, 0.0, 0.001).expect("fc");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol_map");
+        let frame_config = FrameConfig::new(5.0, 0.0, 0.001).expect("frame_config");
         let config = DemodulatorConfig::default();
 
         let result = Demodulator::new(
             &coupling,
-            sm,
-            fc,
+            symbol_map,
+            frame_config,
             Box::new(RatioScoring::default()),
             &config,
         );
@@ -478,20 +518,21 @@ mod tests {
         let coupling = TopologyBuilder::octagon().expect("octagon");
         let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
         let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-        let sm = SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("sm");
-        let fc = FrameConfig::new(2.0, 0.0, 0.001).expect("fc");
+        let symbol_map =
+            SymbolMap::new(vec![(0, p0, 8.0), (1, p1, 12.0)], vec![0, 3]).expect("symbol_map");
+        let frame_config = FrameConfig::new(2.0, 0.0, 0.001).expect("frame_config");
         let config = DemodulatorConfig::default();
 
         let chen = ChenSystem::default_paper();
-        let mut dec = DemodulatorWithSystem::new(
+        let mut decoder = DemodulatorWithSystem::new(
             &coupling,
-            sm,
-            fc,
+            symbol_map,
+            frame_config,
             Box::new(RatioScoring::default()),
             &config,
             Box::new(chen.clone()),
         )
-        .expect("dec");
+        .expect("decoder");
 
         // Encode a symbol first to get valid signals
         let sm2 = SymbolMap::new(
@@ -522,8 +563,8 @@ mod tests {
         modulator.encode_with_system(&0, &chen).expect("encode");
         let signals = modulator.output_signals().to_vec();
 
-        dec.feed_signals(&signals).expect("feed");
-        let symbol = dec.decode().expect("decode");
+        decoder.feed_signals(&signals).expect("feed");
+        let symbol = decoder.decode().expect("decode");
         assert!(symbol < 2);
     }
 

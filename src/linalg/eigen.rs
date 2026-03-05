@@ -48,16 +48,16 @@ pub fn symmetric_eigen(m: &Matrix) -> Result<EigenDecomposition, LinalgError> {
     let eigenvalues: Vec<(f64, f64)> = indexed.iter().map(|(_, v)| (*v, 0.0)).collect();
 
     // Reorder eigenvectors
-    let mut evec_data = DMatrix::zeros(n, n);
+    let mut eigenvector_data = DMatrix::zeros(n, n);
     for (new_col, (old_col, _)) in indexed.iter().enumerate() {
         for row in 0..n {
-            evec_data[(row, new_col)] = se.eigenvectors[(row, *old_col)];
+            eigenvector_data[(row, new_col)] = se.eigenvectors[(row, *old_col)];
         }
     }
 
     Ok(EigenDecomposition {
         eigenvalues,
-        eigenvectors: Some(Matrix::from_nalgebra(evec_data)),
+        eigenvectors: Some(Matrix::from_nalgebra(eigenvector_data)),
     })
 }
 
@@ -79,12 +79,12 @@ pub fn general_eigen(m: &Matrix) -> Result<EigenDecomposition, LinalgError> {
     while i < n {
         if i + 1 < n && t[(i + 1, i)].abs() > 1e-12 {
             // 2x2 block on diagonal → complex conjugate pair
-            let a = t[(i, i)];
-            let b = t[(i, i + 1)];
-            let c = t[(i + 1, i)];
-            let d = t[(i + 1, i + 1)];
-            let trace = a + d;
-            let det = a * d - b * c;
+            let top_left = t[(i, i)];
+            let top_right = t[(i, i + 1)];
+            let bot_left = t[(i + 1, i)];
+            let bot_right = t[(i + 1, i + 1)];
+            let trace = top_left + bot_right;
+            let det = top_left * bot_right - top_right * bot_left;
             let disc = trace * trace - 4.0 * det;
 
             if disc < 0.0 {

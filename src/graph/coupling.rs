@@ -88,12 +88,12 @@ impl CouplingMatrix {
     /// Compute the degree matrix D = diag(row_sums(Ξ)).
     pub fn degree_matrix(&self) -> Result<Matrix, GraphError> {
         let mut degrees = vec![0.0; self.n];
-        for (i, deg) in degrees.iter_mut().enumerate() {
+        for (i, degree) in degrees.iter_mut().enumerate() {
             let mut sum = 0.0;
             for j in 0..self.n {
                 sum += self.adjacency.get(i, j)?;
             }
-            *deg = sum;
+            *degree = sum;
         }
         Ok(Matrix::from_diagonal(&degrees))
     }
@@ -120,7 +120,9 @@ impl CouplingMatrix {
 
     /// Compute the effective coupling matrix: ε · Ξ ⊗ Γ.
     ///
-    /// This is the full (n·d × n·d) coupling matrix used in the coupled network ODE.
+    /// This is the full (n·d × n·d) coupling matrix. **Diagnostic only** — this
+    /// materializes an O(N²·D²) dense matrix and should not be used in hot paths.
+    /// The coupled network simulation uses sparse neighbor lists instead.
     pub fn effective_coupling(&self) -> Matrix {
         let scaled = self.scaled_adjacency();
         scaled.kronecker(&self.inner_coupling)

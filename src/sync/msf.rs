@@ -327,7 +327,7 @@ impl MasterStabilityFunction {
         let mut k2 = vec![0.0; dim];
         let mut k3 = vec![0.0; dim];
         let mut k4 = vec![0.0; dim];
-        let mut tmp_delta = vec![0.0; dim];
+        let mut delta_scratch = vec![0.0; dim];
         let mut jac = vec![0.0; dim * dim];
 
         let dt = config.dt;
@@ -349,21 +349,21 @@ impl MasterStabilityFunction {
 
             // k2 = J_eff * (delta + dt/2 * k1)
             for i in 0..dim {
-                tmp_delta[i] = delta[i] + 0.5 * dt * k1[i];
+                delta_scratch[i] = delta[i] + 0.5 * dt * k1[i];
             }
-            Self::mat_vec_variational(&jac, &gamma, eta, &tmp_delta, &mut k2, dim);
+            Self::mat_vec_variational(&jac, &gamma, eta, &delta_scratch, &mut k2, dim);
 
             // k3 = J_eff * (delta + dt/2 * k2)
             for i in 0..dim {
-                tmp_delta[i] = delta[i] + 0.5 * dt * k2[i];
+                delta_scratch[i] = delta[i] + 0.5 * dt * k2[i];
             }
-            Self::mat_vec_variational(&jac, &gamma, eta, &tmp_delta, &mut k3, dim);
+            Self::mat_vec_variational(&jac, &gamma, eta, &delta_scratch, &mut k3, dim);
 
             // k4 = J_eff * (delta + dt * k3)
             for i in 0..dim {
-                tmp_delta[i] = delta[i] + dt * k3[i];
+                delta_scratch[i] = delta[i] + dt * k3[i];
             }
-            Self::mat_vec_variational(&jac, &gamma, eta, &tmp_delta, &mut k4, dim);
+            Self::mat_vec_variational(&jac, &gamma, eta, &delta_scratch, &mut k4, dim);
 
             // Update delta
             for i in 0..dim {

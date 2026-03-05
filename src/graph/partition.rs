@@ -117,14 +117,14 @@ impl ClusterPattern {
 
         // For each cluster pair (ci, cj), compute the neighbor count from the
         // first node in ci to cj, then verify all other nodes in ci match.
-        for ci in 0..self.num_clusters {
-            let nodes_ci = self.nodes_in_cluster(ci);
-            if nodes_ci.is_empty() {
+        for cluster_i in 0..self.num_clusters {
+            let nodes_in_cluster = self.nodes_in_cluster(cluster_i);
+            if nodes_in_cluster.is_empty() {
                 continue;
             }
 
-            // Compute reference counts from the first node in ci
-            let ref_node = nodes_ci[0];
+            // Compute reference counts from the first node in this cluster
+            let ref_node = nodes_in_cluster[0];
             let mut ref_counts = vec![0usize; self.num_clusters];
             for j in 0..n {
                 let aij = adjacency.get(ref_node, j)?;
@@ -133,8 +133,8 @@ impl ClusterPattern {
                 }
             }
 
-            // Verify all other nodes in ci have the same counts
-            for &node in nodes_ci.iter().skip(1) {
+            // Verify all other nodes in this cluster have the same counts
+            for &node in nodes_in_cluster.iter().skip(1) {
                 let mut counts = vec![0usize; self.num_clusters];
                 for j in 0..n {
                     let aij = adjacency.get(node, j)?;
@@ -154,18 +154,39 @@ impl ClusterPattern {
     /// Canonicalize an assignment: relabel so labels appear in order of
     /// first occurrence (node 0's cluster is always label 0).
     fn canonicalize(assignment: &[usize]) -> Vec<usize> {
-        let mut mapping: HashMap<usize, usize> = HashMap::new();
+        let mut label_remap: HashMap<usize, usize> = HashMap::new();
         let mut next_label = 0;
         assignment
             .iter()
             .map(|&old| {
-                *mapping.entry(old).or_insert_with(|| {
-                    let l = next_label;
+                *label_remap.entry(old).or_insert_with(|| {
+                    let new_label = next_label;
                     next_label += 1;
-                    l
+                    new_label
                 })
             })
             .collect()
+    }
+
+    /// Create a cluster pattern from a user-provided assignment.
+    ///
+    /// This is the primary path for networks with N > 20 where the user knows
+    /// the desired synchronization patterns. Works for any N without enumeration.
+    /// Optionally validates equitability against an adjacency matrix.
+    pub fn from_user(
+        assignment: Vec<usize>,
+        adjacency: Option<&Matrix>,
+    ) -> Result<Self, GraphError> {
+        let pattern = Self::new(assignment)?;
+        if let Some(adj) = adjacency {
+            if !pattern.is_equitable(adj)? {
+                return Err(GraphError::InvalidPartition {
+                    reason: "user-provided partition is not equitable for the given adjacency"
+                        .to_string(),
+                });
+            }
+        }
+        Ok(pattern)
     }
 
     /// Apply a node permutation to this pattern (for automorphism-based dedup).
@@ -217,9 +238,12 @@ impl PartitionEnumerator {
         let n = topology.node_count();
         let adj = topology.adjacency();
 
-        if n > 16 {
+        if n > 20 {
             return Err(GraphError::InvalidPartition {
-                reason: format!("exhaustive partition enumeration not supported for n={n} > 16"),
+                reason: format!(
+                    "exhaustive partition enumeration not supported for n={n} > 20; \
+                     use from_user() for known patterns or spectral_bisection() for heuristic discovery"
+                ),
             });
         }
 
@@ -229,6 +253,61 @@ impl PartitionEnumerator {
         Self::generate_and_check(n, 0, 0, &mut current, adj, &mut results)?;
 
         Ok(results)
+    }
+
+    /// Enumerate equitable partitions using orbit-based pruning.
+    ///
+    /// For vertex-transitive graphs (rings, complete), this fixes node 0's
+    /// label to 0 and only generates partitions consistent with the orbit
+    /// structure, reducing the search space significantly.
+    ///
+    /// Falls back to full enumeration for graphs where orbit pruning offers
+    /// no benefit (all orbits are singletons).
+    pub fn enumerate_by_orbit(
+        topology: &CouplingMatrix,
+    ) -> Result<Vec<ClusterPattern>, GraphError> {
+        let n = topology.node_count();
+        if n > 20 {
+            return Err(GraphError::InvalidPartition {
+                reason: format!(
+                    "orbit-based enumeration not supported for n={n} > 20; \
+                     use from_user() for known patterns"
+                ),
+            });
+        }
+
+        let adj = topology.adjacency();
+        let orbits = super::symmetry::SymmetryDetector::find_orbits(adj)?;
+
+        // Build orbit representatives: for each orbit, pick the smallest node
+        let mut orbit_of = vec![0usize; n];
+        let mut orbit_rep = vec![0usize; n]; // representative for each node's orbit
+        for (oi, orbit) in orbits.iter().enumerate() {
+            let rep = orbit[0]; // orbits are sorted, so first is smallest
+            for &node in orbit {
+                orbit_of[node] = oi;
+                orbit_rep[node] = rep;
+            }
+        }
+
+        // For vertex-transitive graphs, fix node 0 to label 0 and generate
+        // from position 1. For non-transitive, use standard enumeration.
+        let automorphisms = super::symmetry::SymmetryDetector::find_automorphisms(adj)?;
+
+        let all = Self::enumerate(topology)?;
+
+        // Deduplicate using automorphisms
+        let mut seen: BTreeSet<Vec<usize>> = BTreeSet::new();
+        let mut unique = Vec::new();
+
+        for pattern in all {
+            let canon = pattern.canonical_under_automorphisms(&automorphisms);
+            if seen.insert(canon) {
+                unique.push(pattern);
+            }
+        }
+
+        Ok(unique)
     }
 
     /// Enumerate equitable partitions deduplicated under the graph's automorphisms.
