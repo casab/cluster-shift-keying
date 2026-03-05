@@ -22,4 +22,7 @@ pub enum PipelineError {
 
     #[error(transparent)]
     Metrics(#[from] crate::metrics::MetricsError),
+
+    #[error(transparent)]
+    Graph(#[from] crate::graph::GraphError),
 }

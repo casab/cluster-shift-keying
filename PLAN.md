@@ -16,7 +16,7 @@
 | 10 | CLSK Demodulator | **DONE** |
 | 11 | Channel Models | **DONE** |
 | 12 | BER Evaluation & Metrics | **DONE** |
-| 13 | End-to-End Pipeline & Configuration | TODO |
+| 13 | End-to-End Pipeline & Configuration | **DONE** |
 | 14 | Examples & Paper Reproduction | TODO |
 | 15 | Performance & Benchmarks | TODO |
 | 16 | Extensibility Hooks & Future-Proofing | TODO |
@@ -565,6 +565,8 @@ cluster-shift-keying/
    - Load config from TOML, run full pipeline, verify BER < threshold
 
 **Tests:** Config validation, full pipeline round-trip, TOML loading
+
+**Status:** DONE — 272 tests total. Implemented `SimulationConfig` with full serde TOML support (6 sub-configs: system, topology, coupling, codec, channel, simulation). `Simulation` orchestrates end-to-end: symbol generation → modulation → channel → demodulation → BER. Added `toml` dependency. 22 config unit tests, 8 simulation unit tests, 5 pipeline_e2e integration tests.
 
 ---
 
