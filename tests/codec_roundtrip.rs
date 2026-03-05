@@ -12,33 +12,33 @@ fn setup_binary_codec(bit_period: f64) -> (Modulator, Demodulator, ChenSystem, S
 
     let p0 = ClusterPattern::new(vec![0, 1, 0, 1, 0, 1, 0, 1]).expect("p0");
     let p1 = ClusterPattern::new(vec![0, 0, 1, 1, 0, 0, 1, 1]).expect("p1");
-    let sm = SymbolMap::binary(p0, 8.0, p1, 12.0, vec![0, 3]).expect("sm");
+    let symbol_map = SymbolMap::binary(p0, 8.0, p1, 12.0, vec![0, 3]).expect("symbol_map");
 
     let mod_config = ModulatorConfig {
         bit_period,
         dt: 0.001,
         initial_state: vec![1.0, 1.0, 1.0],
     };
-    let modulator = Modulator::new(&coupling, sm.clone(), &mod_config).expect("modulator");
+    let modulator = Modulator::new(&coupling, symbol_map.clone(), &mod_config).expect("modulator");
 
     let frame_config = FrameConfig::new(bit_period, 0.0, 0.001).expect("frame config");
     let demod_config = DemodulatorConfig::default();
     let demodulator = Demodulator::new(
         &coupling,
-        sm.clone(),
+        symbol_map.clone(),
         frame_config,
         Box::new(RatioScoring::default()),
         &demod_config,
     )
     .expect("demodulator");
 
-    (modulator, demodulator, chen, sm)
+    (modulator, demodulator, chen, symbol_map)
 }
 
 /// Verify that the receiver doesn't produce all-zeros.
 #[test]
 fn receiver_does_not_output_all_zeros() {
-    let (mut modulator, mut demodulator, chen, sm) = setup_binary_codec(10.0);
+    let (mut modulator, mut demodulator, chen, symbol_map) = setup_binary_codec(10.0);
 
     // Transmit a mix of 0s and 1s
     let tx_symbols = vec![0, 1, 0, 1, 0, 1, 0, 1];
@@ -47,7 +47,7 @@ fn receiver_does_not_output_all_zeros() {
         .expect("encode");
 
     // Pass through ideal channel
-    let num_links = sm.channel_links().len();
+    let num_links = symbol_map.channel_links().len();
     let mut channel_link = ChannelLink::new(num_links).expect("channel link");
     let mut rx_signals = vec![vec![]; num_links];
     let mut channel = IdealChannel::new();
@@ -72,14 +72,14 @@ fn receiver_does_not_output_all_zeros() {
 /// Verify that noiseless roundtrip achieves reasonable SER.
 #[test]
 fn noiseless_roundtrip_reasonable_ser() {
-    let (mut modulator, mut demodulator, chen, sm) = setup_binary_codec(10.0);
+    let (mut modulator, mut demodulator, chen, symbol_map) = setup_binary_codec(10.0);
 
     let tx_symbols = vec![0, 1, 1, 0, 1, 0, 0, 1];
     let tx_signals = modulator
         .encode_sequence(&tx_symbols, &chen)
         .expect("encode");
 
-    let num_links = sm.channel_links().len();
+    let num_links = symbol_map.channel_links().len();
     let mut channel_link = ChannelLink::new(num_links).expect("channel link");
     let mut rx_signals = vec![vec![]; num_links];
     let mut channel = IdealChannel::new();
@@ -94,7 +94,7 @@ fn noiseless_roundtrip_reasonable_ser() {
     let errors = tx_symbols
         .iter()
         .zip(rx_symbols.iter())
-        .filter(|(a, b)| a != b)
+        .filter(|(tx_sym, rx_sym)| tx_sym != rx_sym)
         .count();
     let ser = errors as f64 / tx_symbols.len() as f64;
 
