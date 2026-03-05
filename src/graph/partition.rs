@@ -117,14 +117,14 @@ impl ClusterPattern {
 
         // For each cluster pair (ci, cj), compute the neighbor count from the
         // first node in ci to cj, then verify all other nodes in ci match.
-        for ci in 0..self.num_clusters {
-            let nodes_ci = self.nodes_in_cluster(ci);
-            if nodes_ci.is_empty() {
+        for cluster_i in 0..self.num_clusters {
+            let nodes_in_cluster = self.nodes_in_cluster(cluster_i);
+            if nodes_in_cluster.is_empty() {
                 continue;
             }
 
-            // Compute reference counts from the first node in ci
-            let ref_node = nodes_ci[0];
+            // Compute reference counts from the first node in this cluster
+            let ref_node = nodes_in_cluster[0];
             let mut ref_counts = vec![0usize; self.num_clusters];
             for j in 0..n {
                 let aij = adjacency.get(ref_node, j)?;
@@ -133,8 +133,8 @@ impl ClusterPattern {
                 }
             }
 
-            // Verify all other nodes in ci have the same counts
-            for &node in nodes_ci.iter().skip(1) {
+            // Verify all other nodes in this cluster have the same counts
+            for &node in nodes_in_cluster.iter().skip(1) {
                 let mut counts = vec![0usize; self.num_clusters];
                 for j in 0..n {
                     let aij = adjacency.get(node, j)?;
@@ -154,15 +154,15 @@ impl ClusterPattern {
     /// Canonicalize an assignment: relabel so labels appear in order of
     /// first occurrence (node 0's cluster is always label 0).
     fn canonicalize(assignment: &[usize]) -> Vec<usize> {
-        let mut mapping: HashMap<usize, usize> = HashMap::new();
+        let mut label_remap: HashMap<usize, usize> = HashMap::new();
         let mut next_label = 0;
         assignment
             .iter()
             .map(|&old| {
-                *mapping.entry(old).or_insert_with(|| {
-                    let l = next_label;
+                *label_remap.entry(old).or_insert_with(|| {
+                    let new_label = next_label;
                     next_label += 1;
-                    l
+                    new_label
                 })
             })
             .collect()

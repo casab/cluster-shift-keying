@@ -88,12 +88,12 @@ impl CouplingMatrix {
     /// Compute the degree matrix D = diag(row_sums(Ξ)).
     pub fn degree_matrix(&self) -> Result<Matrix, GraphError> {
         let mut degrees = vec![0.0; self.n];
-        for (i, deg) in degrees.iter_mut().enumerate() {
+        for (i, degree) in degrees.iter_mut().enumerate() {
             let mut sum = 0.0;
             for j in 0..self.n {
                 sum += self.adjacency.get(i, j)?;
             }
-            *deg = sum;
+            *degree = sum;
         }
         Ok(Matrix::from_diagonal(&degrees))
     }
