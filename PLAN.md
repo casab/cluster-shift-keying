@@ -15,7 +15,7 @@
 | 9 | Synchronization Energy Detector | **DONE** |
 | 10 | CLSK Demodulator | **DONE** |
 | 11 | Channel Models | **DONE** |
-| 12 | BER Evaluation & Metrics | TODO |
+| 12 | BER Evaluation & Metrics | **DONE** |
 | 13 | End-to-End Pipeline & Configuration | TODO |
 | 14 | Examples & Paper Reproduction | TODO |
 | 15 | Performance & Benchmarks | TODO |
@@ -528,6 +528,8 @@ cluster-shift-keying/
    - MonteCarloRunner with IdealChannel → BER = 0.0
 
 **Tests:** BER boundary values, MC runner with noiseless channel
+
+**Status:** DONE — 245 tests total. Implemented `BerEvaluator` (symbol-level, bit-level, and symbol-to-bit BER), `TrialResult`, `BerPoint`/`BerCurve` types, 95% confidence intervals. `MonteCarloRunner` with `TrialRunner` trait, configurable sweep over noise levels, progress callbacks, and precomputed result evaluation. 16 BER unit tests + 12 MC runner tests.
 
 ---
 
