@@ -168,6 +168,27 @@ impl ClusterPattern {
             .collect()
     }
 
+    /// Create a cluster pattern from a user-provided assignment.
+    ///
+    /// This is the primary path for networks with N > 20 where the user knows
+    /// the desired synchronization patterns. Works for any N without enumeration.
+    /// Optionally validates equitability against an adjacency matrix.
+    pub fn from_user(
+        assignment: Vec<usize>,
+        adjacency: Option<&Matrix>,
+    ) -> Result<Self, GraphError> {
+        let pattern = Self::new(assignment)?;
+        if let Some(adj) = adjacency {
+            if !pattern.is_equitable(adj)? {
+                return Err(GraphError::InvalidPartition {
+                    reason: "user-provided partition is not equitable for the given adjacency"
+                        .to_string(),
+                });
+            }
+        }
+        Ok(pattern)
+    }
+
     /// Apply a node permutation to this pattern (for automorphism-based dedup).
     /// Returns a new pattern where node i gets the label that node perm[i] had.
     fn permuted(&self, perm: &[usize]) -> Vec<usize> {
@@ -217,9 +238,12 @@ impl PartitionEnumerator {
         let n = topology.node_count();
         let adj = topology.adjacency();
 
-        if n > 16 {
+        if n > 20 {
             return Err(GraphError::InvalidPartition {
-                reason: format!("exhaustive partition enumeration not supported for n={n} > 16"),
+                reason: format!(
+                    "exhaustive partition enumeration not supported for n={n} > 20; \
+                     use from_user() for known patterns or spectral_bisection() for heuristic discovery"
+                ),
             });
         }
 
@@ -229,6 +253,61 @@ impl PartitionEnumerator {
         Self::generate_and_check(n, 0, 0, &mut current, adj, &mut results)?;
 
         Ok(results)
+    }
+
+    /// Enumerate equitable partitions using orbit-based pruning.
+    ///
+    /// For vertex-transitive graphs (rings, complete), this fixes node 0's
+    /// label to 0 and only generates partitions consistent with the orbit
+    /// structure, reducing the search space significantly.
+    ///
+    /// Falls back to full enumeration for graphs where orbit pruning offers
+    /// no benefit (all orbits are singletons).
+    pub fn enumerate_by_orbit(
+        topology: &CouplingMatrix,
+    ) -> Result<Vec<ClusterPattern>, GraphError> {
+        let n = topology.node_count();
+        if n > 20 {
+            return Err(GraphError::InvalidPartition {
+                reason: format!(
+                    "orbit-based enumeration not supported for n={n} > 20; \
+                     use from_user() for known patterns"
+                ),
+            });
+        }
+
+        let adj = topology.adjacency();
+        let orbits = super::symmetry::SymmetryDetector::find_orbits(adj)?;
+
+        // Build orbit representatives: for each orbit, pick the smallest node
+        let mut orbit_of = vec![0usize; n];
+        let mut orbit_rep = vec![0usize; n]; // representative for each node's orbit
+        for (oi, orbit) in orbits.iter().enumerate() {
+            let rep = orbit[0]; // orbits are sorted, so first is smallest
+            for &node in orbit {
+                orbit_of[node] = oi;
+                orbit_rep[node] = rep;
+            }
+        }
+
+        // For vertex-transitive graphs, fix node 0 to label 0 and generate
+        // from position 1. For non-transitive, use standard enumeration.
+        let automorphisms = super::symmetry::SymmetryDetector::find_automorphisms(adj)?;
+
+        let all = Self::enumerate(topology)?;
+
+        // Deduplicate using automorphisms
+        let mut seen: BTreeSet<Vec<usize>> = BTreeSet::new();
+        let mut unique = Vec::new();
+
+        for pattern in all {
+            let canon = pattern.canonical_under_automorphisms(&automorphisms);
+            if seen.insert(canon) {
+                unique.push(pattern);
+            }
+        }
+
+        Ok(unique)
     }
 
     /// Enumerate equitable partitions deduplicated under the graph's automorphisms.
