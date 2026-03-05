@@ -14,7 +14,7 @@
 | 8 | Symbol Mapping & CLSK Modulator | **DONE** |
 | 9 | Synchronization Energy Detector | **DONE** |
 | 10 | CLSK Demodulator | **DONE** |
-| 11 | Channel Models | TODO |
+| 11 | Channel Models | **DONE** |
 | 12 | BER Evaluation & Metrics | TODO |
 | 13 | End-to-End Pipeline & Configuration | TODO |
 | 14 | Examples & Paper Reproduction | TODO |
@@ -499,6 +499,8 @@ cluster-shift-keying/
    - ChannelLink extracts correct node pair signals
 
 **Tests:** Passthrough identity, noise statistics, link extraction correctness
+
+**Status:** DONE — 219 tests total. Implemented `IdealChannel` (passthrough), `GaussianChannel` (additive/multiplicative noise with seeded RNG), and `ChannelLink` (multi-link signal transmission through any channel model). 22 unit tests covering passthrough, mean preservation, variance statistics, deterministic seeding, noise modes, and error cases.
 
 ---
 
