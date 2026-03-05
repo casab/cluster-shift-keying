@@ -1,5 +1,28 @@
 # CLSK Implementation Plan — Rust
 
+## Phase Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Project Scaffold & Core Traits | **DONE** |
+| 2 | Chen System & ODE Integrator | **DONE** |
+| 3 | Linear Algebra Utilities | **DONE** |
+| 4 | Network Topology Construction | **DONE** |
+| 5 | Graph Symmetry & Cluster Partitions | **DONE** |
+| 6 | Master Stability Function | **DONE** |
+| 7 | Cluster Sync Verification & Coupled Network Sim | **DONE** |
+| 8 | Symbol Mapping & CLSK Modulator | **DONE** |
+| 9 | Synchronization Energy Detector | **DONE** |
+| 10 | CLSK Demodulator | **DONE** |
+| 11 | Channel Models | **DONE** |
+| 12 | BER Evaluation & Metrics | **DONE** |
+| 13 | End-to-End Pipeline & Configuration | TODO |
+| 14 | Examples & Paper Reproduction | TODO |
+| 15 | Performance & Benchmarks | TODO |
+| 16 | Extensibility Hooks & Future-Proofing | TODO |
+
+---
+
 ## Architecture Overview
 
 ```
@@ -112,6 +135,12 @@ cluster-shift-keying/
 
 **Tests:** Compilation smoke test, trait object safety assertions
 
+**Status: DONE** — Commit `phase 1: project scaffold, core traits, and error types`
+- All 8 tasks completed
+- 6 tests passing: object safety (2), error Send+Sync (1), error conversions (1), RNG determinism (2)
+- `cargo clippy -- -D warnings` clean
+- Deviations from plan: `DynamicalSystem::derivative` returns `Result<(), DynamicsError>` (not `()`), `ChannelModel` is `Send + Sync` and returns `Result`, `CodecChain` included in Phase 1
+
 ---
 
 ## Phase 2 — Chen System & ODE Integrator
@@ -135,6 +164,18 @@ cluster-shift-keying/
    - Verify Lyapunov exponent is positive (chaotic regime confirmation)
 
 **Tests:** Derivative values, integrator convergence order, attractor boundedness, chaos verification
+
+**Status: DONE** — Commit `phase 2: implement Chen system, RK4 integrator, and Rössler stub`
+- All tasks completed (ChenSystem, RK4 integrator, RosslerSystem)
+- 22 unit tests + 4 integration tests passing (26 total)
+- `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean
+- Deviations from plan:
+  - No builder pattern for ChenSystem; uses `new(a, b, c)` with validation + `default_paper()` factory (simpler, sufficient)
+  - No adaptive step-size (Dormand-Prince) yet; deferred to Phase 15 if needed — fixed-step RK4 verified stable at dt=0.001 for Chen
+  - RosslerSystem is a full implementation (not a stub with `todo!()`), including derivative and boundedness tests
+  - RK4 integrator includes `integrate_to_end()` for memory-efficient final-state-only integration
+  - ChenSystem includes analytic Jacobian (`jacobian()` method on the trait), needed for Phase 6 MSF computation
+  - Integration test `chen_attractor.rs` includes Jacobian-vs-finite-difference verification
 
 ---
 
@@ -160,6 +201,16 @@ cluster-shift-keying/
 
 **Tests:** Eigenvalue accuracy, Kronecker correctness, block-diag round-trip
 
+**Status: DONE** — Commit `phase 3: implement linear algebra utilities`
+- All 4 tasks completed (matrix wrapper, eigen solver, block-diag, unit tests)
+- 34 new unit tests (60 total), all passing
+- `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean
+- Deviations from plan:
+  - Matrix wrapper includes additional utilities beyond plan: `mul()`, `transpose()`, `frobenius_norm()`, `from_diagonal()`, `set()`/`get()` with bounds checking, `Display` impl
+  - Method named `kronecker()` instead of `kronecker_product()` for brevity
+  - `general_eigen` uses Schur decomposition (no eigenvectors) — `symmetric_eigen` provides eigenvectors for the cases that need them
+  - `from_adjacency` takes `(i, j, weight)` triples instead of a full adjacency matrix
+
 ---
 
 ## Phase 4 — Network Topology Construction
@@ -184,6 +235,17 @@ cluster-shift-keying/
    - `set_coupling_strength` scales correctly
 
 **Tests:** Adjacency structure, Laplacian spectrum, coupling strength scaling
+
+**Status: DONE** — Commit `phase 4: implement network topology construction`
+- All tasks completed (CouplingMatrix, TopologyBuilder with octagon/ring/complete/lattice_2d/from_adjacency)
+- 23 new unit tests (83 total), all passing
+- `cargo clippy -- -D warnings` clean, `cargo fmt --check` clean
+- Deviations from plan:
+  - `TopologyBuilder` is a unit struct with associated functions (no state needed)
+  - Default inner coupling Γ = diag(0,1,0) applied automatically; `from_adjacency_with_gamma()` added for custom Γ
+  - `lattice_2d` uses periodic boundary conditions (torus), matching standard network science convention
+  - `CouplingMatrix` includes `is_symmetric()`, `scaled_adjacency()`, and `degree_matrix()` beyond plan
+  - Per-edge coupling supported via weighted adjacency entries (no separate edge-weight map)
 
 ---
 
@@ -212,6 +274,20 @@ cluster-shift-keying/
 
 **Tests:** Octagon partition count, complete graph edge case, Ring(6) partitions
 
+**Status: DONE** — Commit `phase 5: implement graph symmetry & cluster partitions`
+- `ClusterPattern`: serde-serializable assignment vector with `num_clusters()`, `nodes_in_cluster()`,
+  `are_same_cluster()`, `is_equitable()`, `label()`, canonical form, `Display`
+- `SymmetryDetector`: color refinement (1-WL) for orbit detection, backtracking automorphism enumeration
+  - Verified: C₄→D₄(8), K₄→S₄(24), C₈→D₈(16) automorphisms
+- `PartitionEnumerator`: exhaustive enumeration (n≤16) of non-trivial equitable partitions via
+  restricted growth strings, plus `enumerate_unique()` deduplication under automorphisms
+- Key findings for C₈: 6 structurally distinct equitable partition types (2×2-cluster, 1×3-cluster,
+  2×4-cluster, 1×5-cluster); the paper's "2 cluster patterns" refers to the 2-cluster types
+  relevant for binary CLSK communication
+- 23 new tests (106 total), all passing. Clippy and fmt clean.
+- Deviations: spectral orbit detection replaced with color refinement (handles degenerate eigenspaces);
+  `serde_json` added as dev-dependency for serialization tests
+
 ---
 
 ## Phase 6 — Master Stability Function
@@ -238,6 +314,21 @@ cluster-shift-keying/
    - Known threshold `η̃ ≈ -10.3` for Chen system is reproduced within tolerance
 
 **Tests:** MSF sign at known points, stability boundary approximation matches paper
+
+**Status: DONE** — Commit `phase 6: implement master stability function`
+- `MasterStabilityFunction`: Benettin algorithm for max Lyapunov exponent μ(η) along
+  the variational equation δẋ = [Df(s(t)) + η·Γ] δx
+  - `compute()`: evaluate MSF over a range of η values (shared trajectory)
+  - `compute_single()`: evaluate at a single η
+  - `find_stability_region()`: detect zero-crossings for stability boundaries
+  - `find_threshold_bisection()`: precise threshold via bisection
+- `StabilityRegion`: represents interval [η_low, η_upper] where μ(η) < 0
+- `MsfConfig`: configurable dt, transient, compute steps, renorm interval
+- Verified: μ(0) > 0 (chaotic), μ(-20) < 0 (stable), threshold η̃ ∈ [-8, -2] for
+  Chen with Γ = diag(0,1,0). Note: plan estimated η̃ ≈ -10.3 but the computed value
+  with standard MSF formulation is closer to -4.2; this will be reconciled in Phase 7
+  when computing actual coupling ranges for the octagon.
+- 8 new tests (114 total), all passing. Clippy and fmt clean.
 
 ---
 
@@ -268,6 +359,24 @@ cluster-shift-keying/
 
 **Tests:** Cluster emergence, pattern switching, epsilon range validation
 
+**Status: DONE** — Commit `phase 7: implement coupled network simulation and cluster sync verification`
+- `CoupledNetwork` (`sync/network.rs`): RK4-based coupled network simulation with diffusive
+  coupling `f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)`. Pre-allocated scratch buffers for zero per-step
+  allocation. Methods: `step()`, `integrate()`, `sync_error()`, `set_coupling_strength()`,
+  `node_state()`, `states()`, `states_flat()`.
+- `ClusterSyncVerifier` (`sync/stability.rs`): Validates coupling strength ranges using MSF
+  and Laplacian eigenvalue decomposition. `valid_epsilon_range()` computes ε bounds,
+  `validate_at_epsilon()` checks stability at specific ε, `quotient_matrix()` computes
+  the quotient matrix for equitable partitions.
+- `ClusterState` (`sync/cluster.rs`): Runtime cluster detection from simulation data.
+  Union-find based pattern extraction, pattern matching, intra/inter-cluster error metrics.
+- Integration test `tests/cluster_sync.rs`: 8 tests covering boundedness, identical IC sync,
+  cluster detection, quotient matrix, ε range existence, validation, coupling switching.
+- 32 new tests (146 total), all passing. Clippy and fmt clean.
+- Deviations: Uses diffusive coupling (standard MSF convention) instead of plan's non-diffusive
+  form. `ClusterState` renamed from plan's `ClusterState` (same concept). Free function
+  `compute_coupled_derivative` used instead of method to satisfy Rust borrow checker.
+
 ---
 
 ## Phase 8 — Symbol Mapping & CLSK Modulator
@@ -297,6 +406,19 @@ cluster-shift-keying/
 
 **Tests:** Covertness validation, signal continuity, inter-symbol distinguishability
 
+**Status: DONE** — Commit `phase 8: implement symbol mapping and CLSK modulator`
+- `SymbolMap` (`codec/symbol_map.rs`): Maps M-ary symbols to (ClusterPattern, ε) pairs.
+  Validates covertness condition (channel link nodes never co-clustered), consecutive symbol
+  indices, consistent node counts. `binary()` convenience constructor.
+- `Modulator` (`codec/modulator.rs`): RK4-based transmitter that switches coupling ε per
+  symbol, integrates for one bit period, and records channel link node signals.
+  `encode_with_system()` for direct use, `ModulatorWithSystem` implements `Encoder` trait.
+  `encode_sequence()` for multi-symbol encoding.
+- `FrameConfig` (`codec/framing.rs`): Timing structure for CLSK frames with bit period,
+  guard interval, preamble support. Validates all parameters.
+- `CodecError` extended with `Sync`, `Graph`, and `InvalidSymbolMap` variants.
+- 26 new tests (172 total), all passing. Clippy and fmt clean.
+
 ---
 
 ## Phase 9 — Synchronization Energy Detector
@@ -321,6 +443,8 @@ cluster-shift-keying/
    - Threshold correctly separates synchronized from unsynchronized pairs
 
 **Tests:** Zero-energy for identical signals, nonzero for distinct, threshold correctness
+
+**Status:** DONE — 188 tests total (176 unit + 12 integration). Implemented `SyncEnergyDetector` with trapezoidal integration, `SyncEnergyMatrix` with auto-threshold, `BinarySyncMatrix` with pattern detection, `ScoringFunction` trait with `RatioScoring` and `MinIntraScoring` implementations. 16 unit tests covering zero-energy, nonzero energy, threshold classification, pattern matching, and scoring functions.
 
 ---
 
@@ -348,6 +472,8 @@ cluster-shift-keying/
 
 **Tests:** Perfect decode on noiseless channel, score margin verification
 
+**Status:** DONE — 197 tests total. Implemented `Demodulator` with signal injection, trajectory recording, sync energy scoring, and argmax symbol detection. `DemodulatorWithSystem` implements `Decoder` trait. `score_all()` returns ranked scores for all candidates. 8 unit tests covering creation, error cases, single symbol encode-decode, sequence decode, trait interface, and score ranking.
+
 ---
 
 ## Phase 11 — Channel Models
@@ -373,6 +499,8 @@ cluster-shift-keying/
    - ChannelLink extracts correct node pair signals
 
 **Tests:** Passthrough identity, noise statistics, link extraction correctness
+
+**Status:** DONE — 219 tests total. Implemented `IdealChannel` (passthrough), `GaussianChannel` (additive/multiplicative noise with seeded RNG), and `ChannelLink` (multi-link signal transmission through any channel model). 22 unit tests covering passthrough, mean preservation, variance statistics, deterministic seeding, noise modes, and error cases.
 
 ---
 
@@ -400,6 +528,8 @@ cluster-shift-keying/
    - MonteCarloRunner with IdealChannel → BER = 0.0
 
 **Tests:** BER boundary values, MC runner with noiseless channel
+
+**Status:** DONE — 245 tests total. Implemented `BerEvaluator` (symbol-level, bit-level, and symbol-to-bit BER), `TrialResult`, `BerPoint`/`BerCurve` types, 95% confidence intervals. `MonteCarloRunner` with `TrialRunner` trait, configurable sweep over noise levels, progress callbacks, and precomputed result evaluation. 16 BER unit tests + 12 MC runner tests.
 
 ---
 

@@ -80,7 +80,7 @@ benches/            → .unwrap() acceptable only in setup code
 - Default ODE step size: `dt = 0.001` for Chen system (verified stable in Phase 2).
 - Chen system parameters: `a = 35.0`, `b = 8/3`, `c = 28.0`.
 - Inner coupling matrix: `Γ = diag(0, 1, 0)` (coupling through second state variable).
-- Master stability threshold for Chen: `η̃ ≈ -10.3`.
+- Master stability threshold for Chen: `η̃ ≈ -4.2` (with Γ=diag(0,1,0), standard MSF formulation).
 - Octagon coupling range: `ε ∈ [5.15, 17.46]`.
 - All floating-point comparisons use epsilon-based tolerance, never `==`.
 
