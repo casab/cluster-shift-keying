@@ -120,7 +120,9 @@ impl CouplingMatrix {
 
     /// Compute the effective coupling matrix: ε · Ξ ⊗ Γ.
     ///
-    /// This is the full (n·d × n·d) coupling matrix used in the coupled network ODE.
+    /// This is the full (n·d × n·d) coupling matrix. **Diagnostic only** — this
+    /// materializes an O(N²·D²) dense matrix and should not be used in hot paths.
+    /// The coupled network simulation uses sparse neighbor lists instead.
     pub fn effective_coupling(&self) -> Matrix {
         let scaled = self.scaled_adjacency();
         scaled.kronecker(&self.inner_coupling)
