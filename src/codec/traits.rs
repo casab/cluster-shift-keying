@@ -31,6 +31,8 @@ pub trait Decoder {
 /// This enables layering (e.g. ECC encoding wrapping CLSK encoding)
 /// without modifying either implementation.
 pub struct CodecChain<Outer, Inner> {
+    /// The outer codec (e.g. error-correcting code).
     pub outer: Outer,
+    /// The inner codec (e.g. CLSK modulator/demodulator).
     pub inner: Inner,
 }
