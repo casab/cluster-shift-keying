@@ -43,12 +43,12 @@ pub fn simultaneous_block_diag(a: &Matrix, b: &Matrix) -> Result<BlockDiagResult
             reason: "eigendecomposition did not produce eigenvectors".to_string(),
         })?;
 
-    let pt = p.transpose();
+    let p_transpose = p.transpose();
 
     // P^T A P should be diagonal (eigenvalues of A)
-    let diag_a = pt.mul(a)?.mul(&p)?;
+    let diag_a = p_transpose.mul(a)?.mul(&p)?;
     // P^T B P should also be diagonal if A, B commute
-    let diag_b = pt.mul(b)?.mul(&p)?;
+    let diag_b = p_transpose.mul(b)?.mul(&p)?;
 
     Ok(BlockDiagResult {
         transform: p,
@@ -59,7 +59,6 @@ pub fn simultaneous_block_diag(a: &Matrix, b: &Matrix) -> Result<BlockDiagResult
 
 /// Check if a matrix is approximately diagonal (off-diagonal elements < tol).
 pub fn is_approx_diagonal(m: &Matrix, tol: f64) -> bool {
-    let n = m.nrows().min(m.ncols());
     for i in 0..m.nrows() {
         for j in 0..m.ncols() {
             if i != j {
@@ -71,7 +70,6 @@ pub fn is_approx_diagonal(m: &Matrix, tol: f64) -> bool {
             }
         }
     }
-    let _ = n;
     true
 }
 

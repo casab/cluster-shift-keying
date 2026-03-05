@@ -28,11 +28,11 @@ pub struct CoupledNetwork {
     k2: Vec<f64>,
     k3: Vec<f64>,
     k4: Vec<f64>,
-    tmp: Vec<f64>,
+    scratch: Vec<f64>,
     /// Scratch buffer for single-node derivative.
-    deriv_buf: Vec<f64>,
+    derivative_scratch: Vec<f64>,
     /// Scratch buffer for coupling term of a single node.
-    coupling_buf: Vec<f64>,
+    coupling_scratch: Vec<f64>,
 }
 
 impl CoupledNetwork {
@@ -115,9 +115,9 @@ impl CoupledNetwork {
             k2: vec![0.0; total],
             k3: vec![0.0; total],
             k4: vec![0.0; total],
-            tmp: vec![0.0; total],
-            deriv_buf: vec![0.0; dim],
-            coupling_buf: vec![0.0; dim],
+            scratch: vec![0.0; total],
+            derivative_scratch: vec![0.0; dim],
+            coupling_scratch: vec![0.0; dim],
         })
     }
 
@@ -222,59 +222,59 @@ impl CoupledNetwork {
             dim,
             epsilon,
             &mut self.k1,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // k2 = F(states + dt/2 * k1)
         for i in 0..total {
-            self.tmp[i] = self.states[i] + 0.5 * dt * self.k1[i];
+            self.scratch[i] = self.states[i] + 0.5 * dt * self.k1[i];
         }
         compute_coupled_derivative(
             system,
-            &self.tmp,
+            &self.scratch,
             &self.adjacency,
             &self.gamma,
             n,
             dim,
             epsilon,
             &mut self.k2,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // k3 = F(states + dt/2 * k2)
         for i in 0..total {
-            self.tmp[i] = self.states[i] + 0.5 * dt * self.k2[i];
+            self.scratch[i] = self.states[i] + 0.5 * dt * self.k2[i];
         }
         compute_coupled_derivative(
             system,
-            &self.tmp,
+            &self.scratch,
             &self.adjacency,
             &self.gamma,
             n,
             dim,
             epsilon,
             &mut self.k3,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // k4 = F(states + dt * k3)
         for i in 0..total {
-            self.tmp[i] = self.states[i] + dt * self.k3[i];
+            self.scratch[i] = self.states[i] + dt * self.k3[i];
         }
         compute_coupled_derivative(
             system,
-            &self.tmp,
+            &self.scratch,
             &self.adjacency,
             &self.gamma,
             n,
             dim,
             epsilon,
             &mut self.k4,
-            &mut self.deriv_buf,
-            &mut self.coupling_buf,
+            &mut self.derivative_scratch,
+            &mut self.coupling_scratch,
         )?;
 
         // Update: states += dt/6 * (k1 + 2*k2 + 2*k3 + k4)
@@ -344,17 +344,17 @@ fn compute_coupled_derivative(
     dim: usize,
     epsilon: f64,
     output: &mut [f64],
-    deriv_buf: &mut [f64],
-    coupling_buf: &mut [f64],
+    derivative_scratch: &mut [f64],
+    coupling_scratch: &mut [f64],
 ) -> Result<(), SyncError> {
     for i in 0..n {
         let offset_i = i * dim;
 
         // f(xᵢ)
-        system.derivative(&state[offset_i..offset_i + dim], deriv_buf)?;
+        system.derivative(&state[offset_i..offset_i + dim], derivative_scratch)?;
 
         // Diffusive coupling: ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
-        coupling_buf.fill(0.0);
+        coupling_scratch.fill(0.0);
         for j in 0..n {
             let xi_ij = adjacency[i * n + j];
             if xi_ij.abs() < 1e-15 {
@@ -363,18 +363,18 @@ fn compute_coupled_derivative(
             let offset_j = j * dim;
             // Γ (xⱼ - xᵢ) then scale by ξᵢⱼ
             for d in 0..dim {
-                let mut gamma_diff_d = 0.0;
+                let mut gamma_diff_component = 0.0;
                 for k in 0..dim {
-                    gamma_diff_d +=
+                    gamma_diff_component +=
                         gamma[d * dim + k] * (state[offset_j + k] - state[offset_i + k]);
                 }
-                coupling_buf[d] += xi_ij * gamma_diff_d;
+                coupling_scratch[d] += xi_ij * gamma_diff_component;
             }
         }
 
         // F_i = f(xᵢ) + ε * coupling
         for d in 0..dim {
-            output[offset_i + d] = deriv_buf[d] + epsilon * coupling_buf[d];
+            output[offset_i + d] = derivative_scratch[d] + epsilon * coupling_scratch[d];
         }
     }
 

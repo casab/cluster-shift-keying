@@ -14,7 +14,7 @@ pub struct Rk4 {
     k3: Vec<f64>,
     k4: Vec<f64>,
     /// Scratch buffer for intermediate state evaluation.
-    tmp: Vec<f64>,
+    scratch: Vec<f64>,
 }
 
 impl Rk4 {
@@ -25,7 +25,7 @@ impl Rk4 {
             k2: vec![0.0; dimension],
             k3: vec![0.0; dimension],
             k4: vec![0.0; dimension],
-            tmp: vec![0.0; dimension],
+            scratch: vec![0.0; dimension],
         }
     }
 
@@ -50,32 +50,44 @@ impl Rk4 {
         system.derivative(state, &mut self.k1)?;
 
         // k2 = f(x + dt/2 * k1)
-        for (t, (s, k)) in self.tmp.iter_mut().zip(state.iter().zip(self.k1.iter())) {
-            *t = s + 0.5 * dt * k;
+        for (scratch_val, (state_val, k_val)) in self
+            .scratch
+            .iter_mut()
+            .zip(state.iter().zip(self.k1.iter()))
+        {
+            *scratch_val = state_val + 0.5 * dt * k_val;
         }
-        system.derivative(&self.tmp, &mut self.k2)?;
+        system.derivative(&self.scratch, &mut self.k2)?;
 
         // k3 = f(x + dt/2 * k2)
-        for (t, (s, k)) in self.tmp.iter_mut().zip(state.iter().zip(self.k2.iter())) {
-            *t = s + 0.5 * dt * k;
+        for (scratch_val, (state_val, k_val)) in self
+            .scratch
+            .iter_mut()
+            .zip(state.iter().zip(self.k2.iter()))
+        {
+            *scratch_val = state_val + 0.5 * dt * k_val;
         }
-        system.derivative(&self.tmp, &mut self.k3)?;
+        system.derivative(&self.scratch, &mut self.k3)?;
 
         // k4 = f(x + dt * k3)
-        for (t, (s, k)) in self.tmp.iter_mut().zip(state.iter().zip(self.k3.iter())) {
-            *t = s + dt * k;
+        for (scratch_val, (state_val, k_val)) in self
+            .scratch
+            .iter_mut()
+            .zip(state.iter().zip(self.k3.iter()))
+        {
+            *scratch_val = state_val + dt * k_val;
         }
-        system.derivative(&self.tmp, &mut self.k4)?;
+        system.derivative(&self.scratch, &mut self.k4)?;
 
         // x_{n+1} = x_n + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
-        for (s, (((k1, k2), k3), k4)) in state.iter_mut().zip(
+        for (state_val, (((k1, k2), k3), k4)) in state.iter_mut().zip(
             self.k1
                 .iter()
                 .zip(self.k2.iter())
                 .zip(self.k3.iter())
                 .zip(self.k4.iter()),
         ) {
-            *s += dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+            *state_val += dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
         }
 
         Ok(())
