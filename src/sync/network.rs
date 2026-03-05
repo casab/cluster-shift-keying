@@ -2,14 +2,20 @@ use super::error::SyncError;
 use crate::dynamics::traits::DynamicalSystem;
 use crate::graph::CouplingMatrix;
 
+/// A neighbor entry: (node_index, adjacency_weight).
+type Neighbor = (usize, f64);
+
 /// Coupled network of identical dynamical systems.
 ///
 /// Simulates N nodes coupled through the network equation:
 ///
-///   ẋᵢ = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ xⱼ
+///   ẋᵢ = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
 ///
 /// where f is the isolated node dynamics, ε is the coupling strength,
 /// ξᵢⱼ are adjacency weights, and Γ is the inner coupling matrix.
+///
+/// Uses sparse neighbor lists so the per-step cost is O(N·deg·D²) instead
+/// of O(N²·D²), where deg is the average node degree.
 pub struct CoupledNetwork {
     /// State vectors for all nodes, stored flat: [x₀₀, x₀₁, ..., x₀ₐ, x₁₀, ...].
     states: Vec<f64>,
@@ -17,8 +23,8 @@ pub struct CoupledNetwork {
     n: usize,
     /// Oscillator dimension.
     dim: usize,
-    /// Adjacency matrix (n × n) cached as flat row-major.
-    adjacency: Vec<f64>,
+    /// Sparse neighbor lists: neighbors[i] contains (j, ξ_ij) for all j where ξ_ij ≠ 0.
+    neighbors: Vec<Vec<Neighbor>>,
     /// Inner coupling matrix (dim × dim) cached as flat row-major.
     gamma: Vec<f64>,
     /// Global coupling strength ε.
@@ -88,12 +94,17 @@ impl CoupledNetwork {
             }
         }
 
-        // Cache adjacency as flat array
-        let mut adjacency = vec![0.0; n * n];
+        // Build sparse neighbor lists from adjacency matrix
+        let mut neighbors = Vec::with_capacity(n);
         for i in 0..n {
+            let mut node_neighbors = Vec::new();
             for j in 0..n {
-                adjacency[i * n + j] = coupling.adjacency().get(i, j)?;
+                let weight = coupling.adjacency().get(i, j)?;
+                if weight.abs() > 1e-15 {
+                    node_neighbors.push((j, weight));
+                }
             }
+            neighbors.push(node_neighbors);
         }
 
         // Cache inner coupling as flat array
@@ -108,7 +119,7 @@ impl CoupledNetwork {
             states,
             n,
             dim,
-            adjacency,
+            neighbors,
             gamma,
             epsilon: coupling.epsilon(),
             k1: vec![0.0; total],
@@ -216,9 +227,8 @@ impl CoupledNetwork {
         compute_coupled_derivative(
             system,
             &self.states,
-            &self.adjacency,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k1,
@@ -233,9 +243,8 @@ impl CoupledNetwork {
         compute_coupled_derivative(
             system,
             &self.scratch,
-            &self.adjacency,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k2,
@@ -250,9 +259,8 @@ impl CoupledNetwork {
         compute_coupled_derivative(
             system,
             &self.scratch,
-            &self.adjacency,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k3,
@@ -267,9 +275,8 @@ impl CoupledNetwork {
         compute_coupled_derivative(
             system,
             &self.scratch,
-            &self.adjacency,
+            &self.neighbors,
             &self.gamma,
-            n,
             dim,
             epsilon,
             &mut self.k4,
@@ -328,26 +335,26 @@ impl CoupledNetwork {
     }
 }
 
-/// Compute the full coupled derivative for all nodes (free function to satisfy borrow checker).
+/// Compute the full coupled derivative for all nodes using sparse neighbor lists.
 ///
 /// Uses diffusive coupling (standard MSF convention):
 ///   F_i = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
 ///
-/// This is equivalent to using the Laplacian: F_i = f(xᵢ) - ε Σⱼ L_ij Γ xⱼ
+/// Complexity: O(N · deg · D²) where deg is the average node degree,
+/// compared to O(N² · D²) with a dense adjacency scan.
 #[allow(clippy::too_many_arguments)]
 fn compute_coupled_derivative(
     system: &dyn DynamicalSystem,
     state: &[f64],
-    adjacency: &[f64],
+    neighbors: &[Vec<Neighbor>],
     gamma: &[f64],
-    n: usize,
     dim: usize,
     epsilon: f64,
     output: &mut [f64],
     derivative_scratch: &mut [f64],
     coupling_scratch: &mut [f64],
 ) -> Result<(), SyncError> {
-    for i in 0..n {
+    for (i, node_neighbors) in neighbors.iter().enumerate() {
         let offset_i = i * dim;
 
         // f(xᵢ)
@@ -355,11 +362,7 @@ fn compute_coupled_derivative(
 
         // Diffusive coupling: ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
         coupling_scratch.fill(0.0);
-        for j in 0..n {
-            let xi_ij = adjacency[i * n + j];
-            if xi_ij.abs() < 1e-15 {
-                continue;
-            }
+        for &(j, xi_ij) in node_neighbors {
             let offset_j = j * dim;
             // Γ (xⱼ - xᵢ) then scale by ξᵢⱼ
             for d in 0..dim {
@@ -527,5 +530,36 @@ mod tests {
             same_err < diff_err * 1.5 || same_err < 1.0,
             "same-cluster error ({same_err}) should be smaller than cross-cluster ({diff_err})"
         );
+    }
+
+    #[test]
+    fn sparse_neighbor_lists_correct() {
+        let coupling = TopologyBuilder::octagon().expect("octagon");
+        let net = CoupledNetwork::new(&coupling, &[1.0, 1.0, 1.0], None).expect("net");
+        // C₈ ring: each node has exactly 2 neighbors
+        for i in 0..8 {
+            assert_eq!(
+                net.neighbors[i].len(),
+                2,
+                "node {i} should have 2 neighbors, got {}",
+                net.neighbors[i].len()
+            );
+        }
+        // Node 0 should neighbor nodes 1 and 7
+        let n0: Vec<usize> = net.neighbors[0].iter().map(|&(j, _)| j).collect();
+        assert!(n0.contains(&1), "node 0 should neighbor node 1");
+        assert!(n0.contains(&7), "node 0 should neighbor node 7");
+    }
+
+    #[test]
+    fn large_ring_scales() {
+        // Verify correctness at N=64 (would be slow with dense O(N²))
+        let coupling = TopologyBuilder::ring(64).expect("ring64");
+        let net = CoupledNetwork::new(&coupling, &[1.0, 1.0, 1.0], None).expect("net");
+        assert_eq!(net.node_count(), 64);
+        // Each node in a ring has 2 neighbors
+        for i in 0..64 {
+            assert_eq!(net.neighbors[i].len(), 2);
+        }
     }
 }
