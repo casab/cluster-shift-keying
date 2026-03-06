@@ -4,14 +4,21 @@
 //! computes the symbol error rate (SER) at each level. Outputs CSV for
 //! plotting with gnuplot or matplotlib.
 //!
+//! When built with `--features parallel`, sigma values are evaluated
+//! concurrently using rayon for significant speedup on multi-core systems.
+//!
 //! Usage:
 //!   cargo run --example ber_sweep
 //!   cargo run --example ber_sweep -- --sigma-max 2.0 --steps 10 --symbols 50
 //!   cargo run --example ber_sweep -- --csv > ber_curve.csv
+//!   cargo run --features parallel --example ber_sweep -- --steps 20
 
 use clap::Parser;
 use cluster_shift_keying::pipeline::config::SimulationConfig;
 use cluster_shift_keying::pipeline::simulation::Simulation;
+
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
 
 #[derive(Parser)]
 #[command(name = "ber_sweep", about = "CLSK BER vs. noise sweep")]
@@ -41,6 +48,43 @@ struct Args {
     csv: bool,
 }
 
+/// Result of a single sigma trial.
+struct TrialResult {
+    sigma: f64,
+    ser: f64,
+    symbol_errors: usize,
+    total_symbols: usize,
+}
+
+fn run_trial(
+    sigma: f64,
+    bit_period: f64,
+    symbols: usize,
+    seed: u64,
+) -> Result<TrialResult, String> {
+    let mut config = SimulationConfig::default_paper();
+    config.codec.bit_period = bit_period;
+    config.simulation.num_symbols = symbols;
+    config.simulation.seed = seed;
+
+    if sigma > 0.0 {
+        config.channel.channel_type = "gaussian".to_string();
+        config.channel.sigma = sigma;
+        config.channel.noise_mode = "additive".to_string();
+        config.channel.seed = seed;
+    }
+
+    let sim = Simulation::new(config).map_err(|e| e.to_string())?;
+    let result = sim.run().map_err(|e| e.to_string())?;
+
+    Ok(TrialResult {
+        sigma,
+        ser: result.ser,
+        symbol_errors: result.symbol_errors,
+        total_symbols: result.total_symbols,
+    })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -63,6 +107,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.sigma_max, args.steps
         );
         println!("Seed:              {}", args.seed);
+        #[cfg(feature = "parallel")]
+        println!("Mode:              parallel (rayon)");
+        #[cfg(not(feature = "parallel"))]
+        println!("Mode:              sequential");
         println!();
     }
 
@@ -77,31 +125,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "-".repeat(49));
     }
 
-    for &sigma in &sigma_values {
-        let mut config = SimulationConfig::default_paper();
-        config.codec.bit_period = args.bit_period;
-        config.simulation.num_symbols = args.symbols;
-        config.simulation.seed = args.seed;
+    // Run trials — parallel when feature is enabled, sequential otherwise.
+    #[cfg(feature = "parallel")]
+    let results: Vec<TrialResult> = {
+        let collected: Result<Vec<_>, String> = sigma_values
+            .par_iter()
+            .map(|&sigma| run_trial(sigma, args.bit_period, args.symbols, args.seed))
+            .collect();
+        collected.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    };
 
-        if sigma > 0.0 {
-            config.channel.channel_type = "gaussian".to_string();
-            config.channel.sigma = sigma;
-            config.channel.noise_mode = "additive".to_string();
-            config.channel.seed = args.seed;
-        }
+    #[cfg(not(feature = "parallel"))]
+    let results: Vec<TrialResult> = {
+        let collected: Result<Vec<_>, String> = sigma_values
+            .iter()
+            .map(|&sigma| run_trial(sigma, args.bit_period, args.symbols, args.seed))
+            .collect();
+        collected.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    };
 
-        let sim = Simulation::new(config)?;
-        let result = sim.run()?;
-
+    // Print results in sigma order (parallel may return out of order)
+    for result in &results {
         if args.csv {
             println!(
                 "{:.6},{:.6},{},{}",
-                sigma, result.ser, result.symbol_errors, result.total_symbols
+                result.sigma, result.ser, result.symbol_errors, result.total_symbols
             );
         } else {
             println!(
                 "{:<12.6} {:<12.6} {:<15} {:<10}",
-                sigma, result.ser, result.symbol_errors, result.total_symbols
+                result.sigma, result.ser, result.symbol_errors, result.total_symbols
             );
         }
     }
