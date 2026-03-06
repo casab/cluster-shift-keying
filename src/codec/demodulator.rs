@@ -6,6 +6,9 @@ use crate::dynamics::traits::DynamicalSystem;
 use crate::graph::CouplingMatrix;
 use crate::sync::CoupledNetwork;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 /// Configuration for the CLSK demodulator.
 #[derive(Debug, Clone)]
 pub struct DemodulatorConfig {
@@ -46,6 +49,8 @@ pub struct Demodulator {
     symbol_map: SymbolMap,
     /// Frame configuration.
     frame_config: FrameConfig,
+    /// Channel link node indices, cached to avoid per-symbol allocation.
+    channel_links: Vec<usize>,
     /// Buffer for received channel link signals (one per link, per bit period).
     /// Indexed as received_signals[link_index][time_step].
     received_signals: Vec<Vec<f64>>,
@@ -93,7 +98,8 @@ impl Demodulator {
             })
             .collect();
         let network = CoupledNetwork::new(coupling, &config.initial_state, Some(&perturbations))?;
-        let num_links = symbol_map.channel_links().len();
+        let channel_links = symbol_map.channel_links().to_vec();
+        let num_links = channel_links.len();
         let steps = frame_config.steps_per_bit();
         let state_size = n * config.initial_state.len();
 
@@ -101,6 +107,7 @@ impl Demodulator {
             network,
             symbol_map,
             frame_config,
+            channel_links,
             received_signals: vec![Vec::with_capacity(steps); num_links],
             saved_states_buf: vec![0.0; state_size],
             symbol_counter: 0,
@@ -112,7 +119,7 @@ impl Demodulator {
     /// `signals[link_index][time_step]` — each inner vec must have
     /// `steps_per_bit` samples.
     pub fn feed_signals(&mut self, signals: &[Vec<f64>]) -> Result<(), CodecError> {
-        let num_links = self.symbol_map.channel_links().len();
+        let num_links = self.channel_links.len();
         if signals.len() != num_links {
             return Err(CodecError::DetectionFailed {
                 reason: format!(
@@ -153,8 +160,7 @@ impl Demodulator {
         let steps = self.frame_config.steps_per_bit();
         let dim = self.network.dimension();
         let dt = self.frame_config.dt;
-        let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
-        let num_links = channel_links.len();
+        let num_links = self.channel_links.len();
         let normalizer = (steps * num_links) as f64;
 
         // Apply the same inter-symbol perturbation as the modulator to keep
@@ -167,25 +173,50 @@ impl Demodulator {
         self.saved_states_buf
             .copy_from_slice(self.network.states_flat());
 
+        #[cfg(feature = "parallel")]
+        let winner = {
+            self.detect_symbol_parallel(system, steps, dim, dt, normalizer)?
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let winner = {
+            self.detect_symbol_sequential(system, steps, dim, dt, normalizer)?
+        };
+
+        // Advance reference network with the winning ε for state continuity
+        self.network.restore_states(&self.saved_states_buf)?;
+        let winner_epsilon = self.symbol_map.lookup_epsilon(winner)?;
+        self.network.set_coupling_strength(winner_epsilon);
+        for _t in 0..steps {
+            self.network.step(system, dt)?;
+        }
+
+        Ok(winner)
+    }
+
+    /// Sequential candidate evaluation with early stopping.
+    #[cfg(not(feature = "parallel"))]
+    fn detect_symbol_sequential(
+        &mut self,
+        system: &dyn DynamicalSystem,
+        steps: usize,
+        dim: usize,
+        dt: f64,
+        normalizer: f64,
+    ) -> Result<Symbol, CodecError> {
         let mut best_symbol: Option<Symbol> = None;
         let mut best_mse = f64::INFINITY;
 
         for entry in self.symbol_map.entries() {
-            // Restore reference network to saved state
             self.network.restore_states(&self.saved_states_buf)?;
-
-            // Set coupling to this candidate's epsilon
             self.network.set_coupling_strength(entry.epsilon);
 
-            // Simulate reference network and extract predicted channel signals
-            // with early stopping: if cumulative MSE already exceeds best,
-            // skip remaining timesteps for this candidate.
             let mut cumulative_sse = 0.0;
             let best_sse_threshold = best_mse * normalizer;
             let mut early_stopped = false;
 
             for step in 0..steps {
-                for (link_idx, &node) in channel_links.iter().enumerate() {
+                for (link_idx, &node) in self.channel_links.iter().enumerate() {
                     let state = self.network.node_state(node)?;
                     let predicted = if dim > 1 { state[1] } else { state[0] };
                     let received = self.received_signals[link_idx][step];
@@ -193,7 +224,6 @@ impl Demodulator {
                     cumulative_sse += diff * diff;
                 }
 
-                // Early stopping: if partial SSE already exceeds best, no need to continue
                 if cumulative_sse > best_sse_threshold {
                     early_stopped = true;
                     break;
@@ -211,19 +241,65 @@ impl Demodulator {
             }
         }
 
-        let winner = best_symbol.ok_or(CodecError::DetectionFailed {
+        best_symbol.ok_or(CodecError::DetectionFailed {
             reason: "no symbols in symbol map".to_string(),
-        })?;
+        })
+    }
 
-        // Advance reference network with the winning ε for state continuity
-        self.network.restore_states(&self.saved_states_buf)?;
-        let winner_epsilon = self.symbol_map.lookup_epsilon(winner)?;
-        self.network.set_coupling_strength(winner_epsilon);
-        for _t in 0..steps {
-            self.network.step(system, dt)?;
-        }
+    /// Parallel candidate evaluation: each candidate simulates on its own
+    /// cloned network concurrently using rayon.
+    #[cfg(feature = "parallel")]
+    fn detect_symbol_parallel(
+        &self,
+        system: &dyn DynamicalSystem,
+        steps: usize,
+        dim: usize,
+        dt: f64,
+        normalizer: f64,
+    ) -> Result<Symbol, CodecError> {
+        let entries = self.symbol_map.entries();
+        let saved_states = &self.saved_states_buf;
+        let channel_links = &self.channel_links;
+        let received_signals = &self.received_signals;
 
-        Ok(winner)
+        // Evaluate all candidates in parallel; each gets its own network clone.
+        let results: Vec<(Symbol, f64)> = entries
+            .par_iter()
+            .map(|entry| {
+                let mut net = self.network.clone();
+                net.restore_states(saved_states)
+                    .expect("restore in parallel candidate");
+                net.set_coupling_strength(entry.epsilon);
+
+                let mut cumulative_sse = 0.0;
+                // step_idx indexes received_signals[link_idx][step_idx] (2D access)
+                // and also gates net.step() — not replaceable with a simple iterator.
+                #[allow(clippy::needless_range_loop)]
+                for step_idx in 0..steps {
+                    for (link_idx, &node) in channel_links.iter().enumerate() {
+                        let state = net
+                            .node_state(node)
+                            .expect("node_state in parallel candidate");
+                        let predicted = if dim > 1 { state[1] } else { state[0] };
+                        let diff = predicted - received_signals[link_idx][step_idx];
+                        cumulative_sse += diff * diff;
+                    }
+                    net.step(system, dt)
+                        .expect("step in parallel candidate");
+                }
+
+                let mse = cumulative_sse / normalizer;
+                (entry.symbol, mse)
+            })
+            .collect();
+
+        results
+            .into_iter()
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(sym, _)| sym)
+            .ok_or(CodecError::DetectionFailed {
+                reason: "no symbols in symbol map".to_string(),
+            })
     }
 
     /// Decode a sequence of symbols from concatenated channel link signals.
@@ -237,7 +313,7 @@ impl Demodulator {
         system: &dyn DynamicalSystem,
     ) -> Result<Vec<Symbol>, CodecError> {
         let steps = self.frame_config.steps_per_bit();
-        let num_links = self.symbol_map.channel_links().len();
+        let num_links = self.channel_links.len();
 
         if signals.len() != num_links {
             return Err(CodecError::DetectionFailed {
@@ -308,8 +384,7 @@ impl Demodulator {
         let steps = self.frame_config.steps_per_bit();
         let dim = self.network.dimension();
         let dt = self.frame_config.dt;
-        let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
-        let num_links = channel_links.len();
+        let num_links = self.channel_links.len();
 
         self.saved_states_buf
             .copy_from_slice(self.network.states_flat());
@@ -321,7 +396,7 @@ impl Demodulator {
 
             let mut mse = 0.0;
             for step in 0..steps {
-                for (link_idx, &node) in channel_links.iter().enumerate() {
+                for (link_idx, &node) in self.channel_links.iter().enumerate() {
                     let state = self.network.node_state(node)?;
                     let predicted = if dim > 1 { state[1] } else { state[0] };
                     let received = self.received_signals[link_idx][step];

@@ -16,6 +16,7 @@ type Neighbor = (usize, f64);
 ///
 /// Uses sparse neighbor lists so the per-step cost is O(N·deg·D²) instead
 /// of O(N²·D²), where deg is the average node degree.
+#[derive(Clone)]
 pub struct CoupledNetwork {
     /// State vectors for all nodes, stored flat: [x₀₀, x₀₁, ..., x₀ₐ, x₁₀, ...].
     states: Vec<f64>,
@@ -27,6 +28,9 @@ pub struct CoupledNetwork {
     neighbors: Vec<Vec<Neighbor>>,
     /// Inner coupling matrix (dim × dim) cached as flat row-major.
     gamma: Vec<f64>,
+    /// Diagonal of Γ, set when Γ is diagonal (common case: Γ=diag(0,1,0)).
+    /// Enables a fast path in coupling computation: O(N·deg·D) instead of O(N·deg·D²).
+    gamma_diagonal: Option<Vec<f64>>,
     /// Global coupling strength ε.
     epsilon: f64,
     /// RK4 scratch buffers (sized n*dim each).
@@ -115,12 +119,23 @@ impl CoupledNetwork {
             }
         }
 
+        // Detect if gamma is diagonal for fast-path coupling computation.
+        let is_diagonal = (0..dim).all(|i| {
+            (0..dim).all(|j| i == j || gamma[i * dim + j].abs() < 1e-15)
+        });
+        let gamma_diagonal = if is_diagonal {
+            Some((0..dim).map(|i| gamma[i * dim + i]).collect())
+        } else {
+            None
+        };
+
         Ok(Self {
             states,
             n,
             dim,
             neighbors,
             gamma,
+            gamma_diagonal,
             epsilon: coupling.epsilon(),
             k1: vec![0.0; total],
             k2: vec![0.0; total],
@@ -248,6 +263,7 @@ impl CoupledNetwork {
             &self.states,
             &self.neighbors,
             &self.gamma,
+            self.gamma_diagonal.as_deref(),
             dim,
             epsilon,
             &mut self.k1,
@@ -264,6 +280,7 @@ impl CoupledNetwork {
             &self.scratch,
             &self.neighbors,
             &self.gamma,
+            self.gamma_diagonal.as_deref(),
             dim,
             epsilon,
             &mut self.k2,
@@ -280,6 +297,7 @@ impl CoupledNetwork {
             &self.scratch,
             &self.neighbors,
             &self.gamma,
+            self.gamma_diagonal.as_deref(),
             dim,
             epsilon,
             &mut self.k3,
@@ -296,6 +314,7 @@ impl CoupledNetwork {
             &self.scratch,
             &self.neighbors,
             &self.gamma,
+            self.gamma_diagonal.as_deref(),
             dim,
             epsilon,
             &mut self.k4,
@@ -359,44 +378,64 @@ impl CoupledNetwork {
 /// Uses diffusive coupling (standard MSF convention):
 ///   F_i = f(xᵢ) + ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
 ///
-/// Complexity: O(N · deg · D²) where deg is the average node degree,
-/// compared to O(N² · D²) with a dense adjacency scan.
+/// When `gamma_diag` is `Some`, uses a fast path that avoids the inner D×D matrix
+/// multiply, reducing complexity from O(N·deg·D²) to O(N·deg·D).
 #[allow(clippy::too_many_arguments)]
 fn compute_coupled_derivative(
     system: &dyn DynamicalSystem,
     state: &[f64],
     neighbors: &[Vec<Neighbor>],
     gamma: &[f64],
+    gamma_diag: Option<&[f64]>,
     dim: usize,
     epsilon: f64,
     output: &mut [f64],
     derivative_scratch: &mut [f64],
     coupling_scratch: &mut [f64],
 ) -> Result<(), SyncError> {
-    for (i, node_neighbors) in neighbors.iter().enumerate() {
-        let offset_i = i * dim;
+    if let Some(diag) = gamma_diag {
+        // Fast path: Γ is diagonal → coupling_d = Σⱼ ξᵢⱼ · γ_dd · (xⱼ_d - xᵢ_d)
+        for (i, node_neighbors) in neighbors.iter().enumerate() {
+            let offset_i = i * dim;
 
-        // f(xᵢ)
-        system.derivative(&state[offset_i..offset_i + dim], derivative_scratch)?;
+            system.derivative(&state[offset_i..offset_i + dim], derivative_scratch)?;
 
-        // Diffusive coupling: ε Σⱼ ξᵢⱼ Γ (xⱼ - xᵢ)
-        coupling_scratch.fill(0.0);
-        for &(j, xi_ij) in node_neighbors {
-            let offset_j = j * dim;
-            // Γ (xⱼ - xᵢ) then scale by ξᵢⱼ
-            for d in 0..dim {
-                let mut gamma_diff_component = 0.0;
-                for k in 0..dim {
-                    gamma_diff_component +=
-                        gamma[d * dim + k] * (state[offset_j + k] - state[offset_i + k]);
+            coupling_scratch.fill(0.0);
+            for &(j, xi_ij) in node_neighbors {
+                let offset_j = j * dim;
+                for d in 0..dim {
+                    coupling_scratch[d] +=
+                        xi_ij * diag[d] * (state[offset_j + d] - state[offset_i + d]);
                 }
-                coupling_scratch[d] += xi_ij * gamma_diff_component;
+            }
+
+            for d in 0..dim {
+                output[offset_i + d] = derivative_scratch[d] + epsilon * coupling_scratch[d];
             }
         }
+    } else {
+        // General path: full Γ matrix multiply
+        for (i, node_neighbors) in neighbors.iter().enumerate() {
+            let offset_i = i * dim;
 
-        // F_i = f(xᵢ) + ε * coupling
-        for d in 0..dim {
-            output[offset_i + d] = derivative_scratch[d] + epsilon * coupling_scratch[d];
+            system.derivative(&state[offset_i..offset_i + dim], derivative_scratch)?;
+
+            coupling_scratch.fill(0.0);
+            for &(j, xi_ij) in node_neighbors {
+                let offset_j = j * dim;
+                for d in 0..dim {
+                    let mut gamma_diff_component = 0.0;
+                    for k in 0..dim {
+                        gamma_diff_component +=
+                            gamma[d * dim + k] * (state[offset_j + k] - state[offset_i + k]);
+                    }
+                    coupling_scratch[d] += xi_ij * gamma_diff_component;
+                }
+            }
+
+            for d in 0..dim {
+                output[offset_i + d] = derivative_scratch[d] + epsilon * coupling_scratch[d];
+            }
         }
     }
 
