@@ -1,8 +1,7 @@
 use super::error::ChannelError;
 use super::traits::ChannelModel;
-use rand::distributions::Distribution;
 use rand::SeedableRng;
-use rand_distr::Normal;
+use rand_distr::{Distribution, Normal};
 
 /// Noise mode for the Gaussian channel.
 #[derive(Debug, Clone, Copy, PartialEq)]
