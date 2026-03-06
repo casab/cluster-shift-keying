@@ -174,14 +174,10 @@ impl Demodulator {
             .copy_from_slice(self.network.states_flat());
 
         #[cfg(feature = "parallel")]
-        let winner = {
-            self.detect_symbol_parallel(system, steps, dim, dt, normalizer)?
-        };
+        let winner = { self.detect_symbol_parallel(system, steps, dim, dt, normalizer)? };
 
         #[cfg(not(feature = "parallel"))]
-        let winner = {
-            self.detect_symbol_sequential(system, steps, dim, dt, normalizer)?
-        };
+        let winner = { self.detect_symbol_sequential(system, steps, dim, dt, normalizer)? };
 
         // Advance reference network with the winning ε for state continuity
         self.network.restore_states(&self.saved_states_buf)?;
@@ -284,8 +280,7 @@ impl Demodulator {
                         let diff = predicted - received_signals[link_idx][step_idx];
                         cumulative_sse += diff * diff;
                     }
-                    net.step(system, dt)
-                        .expect("step in parallel candidate");
+                    net.step(system, dt).expect("step in parallel candidate");
                 }
 
                 let mse = cumulative_sse / normalizer;

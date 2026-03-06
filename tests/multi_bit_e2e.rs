@@ -5,10 +5,7 @@ use cluster_shift_keying::codec::multi_bit::{build_mary_clsk, MaryClskConfig};
 use cluster_shift_keying::dynamics::chen::ChenSystem;
 
 /// Helper: run a full encode-channel-decode roundtrip on an ideal channel.
-fn roundtrip(
-    config: &MaryClskConfig,
-    tx_symbols: &[usize],
-) -> (Vec<usize>, f64) {
+fn roundtrip(config: &MaryClskConfig, tx_symbols: &[usize]) -> (Vec<usize>, f64) {
     let mut system = build_mary_clsk(config).expect("build system");
     let chen = ChenSystem::default_paper();
 

@@ -182,7 +182,7 @@ impl Simulation {
         let mut rng = rand::rngs::StdRng::seed_from_u64(self.config.simulation.seed);
         let alphabet_size = symbol_map.alphabet_size();
         (0..self.config.simulation.num_symbols)
-            .map(|_| rng.gen_range(0..alphabet_size))
+            .map(|_| rng.random_range(0..alphabet_size))
             .collect()
     }
 

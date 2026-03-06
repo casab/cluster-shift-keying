@@ -123,9 +123,8 @@ impl CoupledNetwork {
         }
 
         // Detect if gamma is diagonal for fast-path coupling computation.
-        let is_diagonal = (0..dim).all(|i| {
-            (0..dim).all(|j| i == j || gamma[i * dim + j].abs() < 1e-15)
-        });
+        let is_diagonal =
+            (0..dim).all(|i| (0..dim).all(|j| i == j || gamma[i * dim + j].abs() < 1e-15));
         let gamma_diagonal = if is_diagonal {
             Some((0..dim).map(|i| gamma[i * dim + i]).collect())
         } else {
@@ -401,14 +400,7 @@ fn eval_coupled_derivative(
     {
         if n >= PARALLEL_NODE_THRESHOLD {
             return compute_coupled_derivative_parallel(
-                system,
-                state,
-                neighbors,
-                gamma,
-                gamma_diag,
-                dim,
-                epsilon,
-                output,
+                system, state, neighbors, gamma, gamma_diag, dim, epsilon, output,
             );
         }
     }

@@ -50,7 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let m = 1usize << args.bits_per_symbol;
 
-    println!("=== M-ary Cluster Shift Keying: Ring({}) Demo ===", args.num_nodes);
+    println!(
+        "=== M-ary Cluster Shift Keying: Ring({}) Demo ===",
+        args.num_nodes
+    );
     println!("Bits/symbol:  {} (M = {} symbols)", args.bits_per_symbol, m);
     println!("Epsilon range: [{}, {}]", args.eps_min, args.eps_max);
     println!("Bit period:   {} time units", args.bit_period);
@@ -58,7 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Build M-ary CLSK system using the convenience builder
-    println!("Building ring({}) topology and CLSK system...", args.num_nodes);
+    println!(
+        "Building ring({}) topology and CLSK system...",
+        args.num_nodes
+    );
     let config = MaryClskConfig {
         num_nodes: args.num_nodes,
         bits_per_symbol: args.bits_per_symbol,
@@ -79,9 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Encode
     let chen = ChenSystem::default_paper();
     println!("Encoding {} symbols...", tx_symbols.len());
-    let tx_signals = system
-        .modulator
-        .encode_sequence(&tx_symbols, &chen)?;
+    let tx_signals = system.modulator.encode_sequence(&tx_symbols, &chen)?;
     println!(
         "  Signal length: {} samples per link ({} links)",
         tx_signals[0].len(),
@@ -122,7 +126,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if ser == 0.0 {
-        println!("\nPerfect transmission — all {} symbols recovered correctly!", tx_symbols.len());
+        println!(
+            "\nPerfect transmission — all {} symbols recovered correctly!",
+            tx_symbols.len()
+        );
     } else {
         println!("\n{} symbol error(s) detected.", symbol_errors);
     }
