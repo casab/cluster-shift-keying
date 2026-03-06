@@ -2,6 +2,9 @@ use super::error::SyncError;
 use crate::dynamics::traits::DynamicalSystem;
 use crate::graph::CouplingMatrix;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 /// A neighbor entry: (node_index, adjacency_weight).
 type Neighbor = (usize, f64);
 
@@ -252,20 +255,18 @@ impl CoupledNetwork {
 
     /// Advance the coupled network by one RK4 step of size `dt`.
     pub fn step(&mut self, system: &dyn DynamicalSystem, dt: f64) -> Result<(), SyncError> {
-        let n = self.n;
-        let dim = self.dim;
-        let total = n * dim;
-        let epsilon = self.epsilon;
+        let total = self.n * self.dim;
 
         // k1 = F(states)
-        compute_coupled_derivative(
+        eval_coupled_derivative(
             system,
             &self.states,
             &self.neighbors,
             &self.gamma,
             self.gamma_diagonal.as_deref(),
-            dim,
-            epsilon,
+            self.n,
+            self.dim,
+            self.epsilon,
             &mut self.k1,
             &mut self.derivative_scratch,
             &mut self.coupling_scratch,
@@ -275,14 +276,15 @@ impl CoupledNetwork {
         for i in 0..total {
             self.scratch[i] = self.states[i] + 0.5 * dt * self.k1[i];
         }
-        compute_coupled_derivative(
+        eval_coupled_derivative(
             system,
             &self.scratch,
             &self.neighbors,
             &self.gamma,
             self.gamma_diagonal.as_deref(),
-            dim,
-            epsilon,
+            self.n,
+            self.dim,
+            self.epsilon,
             &mut self.k2,
             &mut self.derivative_scratch,
             &mut self.coupling_scratch,
@@ -292,14 +294,15 @@ impl CoupledNetwork {
         for i in 0..total {
             self.scratch[i] = self.states[i] + 0.5 * dt * self.k2[i];
         }
-        compute_coupled_derivative(
+        eval_coupled_derivative(
             system,
             &self.scratch,
             &self.neighbors,
             &self.gamma,
             self.gamma_diagonal.as_deref(),
-            dim,
-            epsilon,
+            self.n,
+            self.dim,
+            self.epsilon,
             &mut self.k3,
             &mut self.derivative_scratch,
             &mut self.coupling_scratch,
@@ -309,14 +312,15 @@ impl CoupledNetwork {
         for i in 0..total {
             self.scratch[i] = self.states[i] + dt * self.k3[i];
         }
-        compute_coupled_derivative(
+        eval_coupled_derivative(
             system,
             &self.scratch,
             &self.neighbors,
             &self.gamma,
             self.gamma_diagonal.as_deref(),
-            dim,
-            epsilon,
+            self.n,
+            self.dim,
+            self.epsilon,
             &mut self.k4,
             &mut self.derivative_scratch,
             &mut self.coupling_scratch,
@@ -371,6 +375,56 @@ impl CoupledNetwork {
             .sqrt();
         Ok(err)
     }
+}
+
+/// Minimum node count before parallel derivative computation kicks in.
+/// Below this threshold, thread spawn overhead exceeds the parallelism gain.
+#[cfg(feature = "parallel")]
+const PARALLEL_NODE_THRESHOLD: usize = 64;
+
+/// Dispatch to parallel or sequential derivative computation based on node count.
+#[allow(clippy::too_many_arguments)]
+fn eval_coupled_derivative(
+    system: &dyn DynamicalSystem,
+    state: &[f64],
+    neighbors: &[Vec<Neighbor>],
+    gamma: &[f64],
+    gamma_diag: Option<&[f64]>,
+    n: usize,
+    dim: usize,
+    epsilon: f64,
+    output: &mut [f64],
+    derivative_scratch: &mut [f64],
+    coupling_scratch: &mut [f64],
+) -> Result<(), SyncError> {
+    #[cfg(feature = "parallel")]
+    {
+        if n >= PARALLEL_NODE_THRESHOLD {
+            return compute_coupled_derivative_parallel(
+                system,
+                state,
+                neighbors,
+                gamma,
+                gamma_diag,
+                dim,
+                epsilon,
+                output,
+            );
+        }
+    }
+    let _ = n; // suppress unused warning without parallel feature
+    compute_coupled_derivative(
+        system,
+        state,
+        neighbors,
+        gamma,
+        gamma_diag,
+        dim,
+        epsilon,
+        output,
+        derivative_scratch,
+        coupling_scratch,
+    )
 }
 
 /// Compute the full coupled derivative for all nodes using sparse neighbor lists.
@@ -438,6 +492,70 @@ fn compute_coupled_derivative(
             }
         }
     }
+
+    Ok(())
+}
+
+/// Parallel version of `compute_coupled_derivative` using rayon.
+///
+/// Each node's derivative is computed independently on its own thread with
+/// thread-local scratch buffers. Output chunks are disjoint so no synchronization
+/// is needed.
+#[cfg(feature = "parallel")]
+#[allow(clippy::too_many_arguments)]
+fn compute_coupled_derivative_parallel(
+    system: &(dyn DynamicalSystem + Sync),
+    state: &[f64],
+    neighbors: &[Vec<Neighbor>],
+    gamma: &[f64],
+    gamma_diag: Option<&[f64]>,
+    dim: usize,
+    epsilon: f64,
+    output: &mut [f64],
+) -> Result<(), SyncError> {
+    // Split output into per-node chunks and process in parallel.
+    // Each chunk is `dim` elements wide, owned exclusively by one thread.
+    output
+        .par_chunks_mut(dim)
+        .enumerate()
+        .try_for_each(|(i, out_chunk)| {
+            let node_neighbors = &neighbors[i];
+            let offset_i = i * dim;
+
+            // Thread-local scratch buffers
+            let mut deriv = vec![0.0; dim];
+            let mut coupling = vec![0.0; dim];
+
+            system.derivative(&state[offset_i..offset_i + dim], &mut deriv)?;
+
+            if let Some(diag) = gamma_diag {
+                for &(j, xi_ij) in node_neighbors {
+                    let offset_j = j * dim;
+                    for d in 0..dim {
+                        coupling[d] +=
+                            xi_ij * diag[d] * (state[offset_j + d] - state[offset_i + d]);
+                    }
+                }
+            } else {
+                for &(j, xi_ij) in node_neighbors {
+                    let offset_j = j * dim;
+                    for d in 0..dim {
+                        let mut gamma_diff = 0.0;
+                        for k in 0..dim {
+                            gamma_diff +=
+                                gamma[d * dim + k] * (state[offset_j + k] - state[offset_i + k]);
+                        }
+                        coupling[d] += xi_ij * gamma_diff;
+                    }
+                }
+            }
+
+            for d in 0..dim {
+                out_chunk[d] = deriv[d] + epsilon * coupling[d];
+            }
+
+            Ok::<(), SyncError>(())
+        })?;
 
     Ok(())
 }
