@@ -36,6 +36,9 @@ impl Default for DemodulatorConfig {
 /// This works because the reference network tracks the TX state (assuming
 /// correct previous detections). The correct ε produces signals matching
 /// the received ones; incorrect ε produces different signals.
+/// Default amplitude for inter-symbol perturbation (must match modulator).
+const DEFAULT_PERTURBATION_ALPHA: f64 = 0.01;
+
 pub struct Demodulator {
     /// Reference network mirroring the transmitter state.
     network: CoupledNetwork,
@@ -49,6 +52,8 @@ pub struct Demodulator {
     /// Pre-allocated buffer for saving/restoring network states, avoiding
     /// per-symbol heap allocation in detect_symbol().
     saved_states_buf: Vec<f64>,
+    /// Counter for inter-symbol perturbation keying (must match modulator).
+    symbol_counter: usize,
 }
 
 impl Demodulator {
@@ -98,6 +103,7 @@ impl Demodulator {
             frame_config,
             received_signals: vec![Vec::with_capacity(steps); num_links],
             saved_states_buf: vec![0.0; state_size],
+            symbol_counter: 0,
         })
     }
 
@@ -150,6 +156,12 @@ impl Demodulator {
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
         let num_links = channel_links.len();
         let normalizer = (steps * num_links) as f64;
+
+        // Apply the same inter-symbol perturbation as the modulator to keep
+        // the reference network in sync with the transmitter.
+        self.network
+            .apply_inter_symbol_perturbation(self.symbol_counter, DEFAULT_PERTURBATION_ALPHA);
+        self.symbol_counter += 1;
 
         // Save reference network state into pre-allocated buffer (no heap alloc)
         self.saved_states_buf
@@ -583,6 +595,49 @@ mod tests {
         assert!(
             scores[0].1 >= scores[1].1,
             "scores should be sorted descending"
+        );
+    }
+
+    #[test]
+    fn single_symbol_detection_correct() {
+        // Verify that each symbol is correctly detected on ideal channel.
+        for test_symbol in [0usize, 1] {
+            let (mut modulator, mut demodulator, chen) = setup_codec(5.0);
+
+            modulator
+                .encode_with_system(&test_symbol, &chen)
+                .expect("encode");
+            let signals = modulator.output_signals().to_vec();
+
+            demodulator.feed_signals(&signals).expect("feed");
+            let detected = demodulator.detect_symbol(&chen).expect("detect");
+
+            assert_eq!(
+                detected, test_symbol,
+                "symbol {test_symbol} should be correctly detected"
+            );
+        }
+    }
+
+    #[test]
+    fn sequence_detection_perfect_on_ideal_channel() {
+        // With identical initial states and ideal channel,
+        // detection should be 100% correct for any sequence.
+        let (mut modulator, mut demodulator, chen) = setup_codec(10.0);
+
+        let tx_symbols = vec![0, 1, 0, 1, 1, 0, 0, 1];
+        let signals = modulator
+            .encode_sequence(&tx_symbols, &chen)
+            .expect("encode");
+
+        let rx_symbols = demodulator
+            .decode_sequence(&signals, tx_symbols.len(), &chen)
+            .expect("decode");
+
+        assert_eq!(
+            tx_symbols, rx_symbols,
+            "detection should be perfect on ideal channel\nTX: {:?}\nRX: {:?}",
+            tx_symbols, rx_symbols
         );
     }
 }

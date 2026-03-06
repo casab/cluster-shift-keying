@@ -27,6 +27,10 @@ impl Default for ModulatorConfig {
     }
 }
 
+/// Default amplitude for inter-symbol perturbation that prevents full
+/// synchronization while preserving cluster sync distinguishability.
+const DEFAULT_PERTURBATION_ALPHA: f64 = 0.01;
+
 /// CLSK modulator: encodes symbols by switching the coupling strength of a
 /// coupled chaotic network and extracting channel link signals.
 ///
@@ -48,6 +52,8 @@ pub struct Modulator {
     /// Output buffer: channel link signals for the last encoded symbol.
     /// Indexed as output_signals[link_index][time_step].
     output_signals: Vec<Vec<f64>>,
+    /// Counter for inter-symbol perturbation keying.
+    symbol_counter: usize,
 }
 
 impl Modulator {
@@ -101,6 +107,7 @@ impl Modulator {
             dt: config.dt,
             steps_per_bit,
             output_signals,
+            symbol_counter: 0,
         })
     }
 
@@ -155,6 +162,14 @@ impl Modulator {
     ) -> Result<(), CodecError> {
         let epsilon = self.symbol_map.lookup_epsilon(*symbol)?;
         let channel_links: Vec<usize> = self.symbol_map.channel_links().to_vec();
+
+        // Apply inter-symbol perturbation to prevent full synchronization.
+        // Without this, all nodes converge to identical states after a few
+        // symbols, making the coupling term vanish and different epsilon
+        // values produce indistinguishable dynamics.
+        self.network
+            .apply_inter_symbol_perturbation(self.symbol_counter, DEFAULT_PERTURBATION_ALPHA);
+        self.symbol_counter += 1;
 
         // Set coupling strength for this symbol
         self.network.set_coupling_strength(epsilon);
