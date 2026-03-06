@@ -194,6 +194,25 @@ impl CoupledNetwork {
         Ok(())
     }
 
+    /// Apply deterministic inter-symbol perturbations to break full synchronization.
+    ///
+    /// Adds small node-dependent perturbations keyed by symbol counter `k`.
+    /// This prevents the network from settling into full synchronization
+    /// (where the coupling term vanishes and different epsilon values produce
+    /// identical dynamics). The perturbation amplitude `alpha` should be small
+    /// enough not to disrupt cluster synchronization but large enough to
+    /// maintain distinguishable transient dynamics.
+    pub fn apply_inter_symbol_perturbation(&mut self, k: usize, alpha: f64) {
+        for i in 0..self.n {
+            let offset = i * self.dim;
+            for d in 0..self.dim {
+                // Deterministic, node- and time-dependent perturbation
+                let phase = (i * self.dim + d) as f64 * 0.37 + k as f64 * 0.73;
+                self.states[offset + d] += alpha * phase.sin();
+            }
+        }
+    }
+
     /// Set the state of node `i`.
     pub fn set_node_state(&mut self, i: usize, state: &[f64]) -> Result<(), SyncError> {
         if i >= self.n {
