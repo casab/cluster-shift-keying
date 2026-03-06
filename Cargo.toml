@@ -9,9 +9,13 @@ license = "GPL-2.0"
 nalgebra = "0.33"
 rand = { version = "0.8", features = ["small_rng"] }
 rand_distr = "0.4"
+rayon = { version = "1.10", optional = true }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
+
+[features]
+parallel = ["rayon"]
 
 [dev-dependencies]
 clap = { version = "4", features = ["derive"] }
